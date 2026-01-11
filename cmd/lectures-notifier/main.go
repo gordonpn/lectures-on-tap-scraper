@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -42,10 +43,14 @@ type event struct {
 	} `json:"ticket_availability"`
 }
 
+func init() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+}
+
 func mustEnv(k string) string {
 	v := strings.TrimSpace(os.Getenv(k))
 	if v == "" {
-		panic("missing env var: " + k)
+		log.Fatalf("missing env var: %s", k)
 	}
 	return v
 }
@@ -58,6 +63,7 @@ func isTicketsAvailable(e event) bool {
 }
 
 func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, error) {
+	log.Println("starting to fetch live events from EventBrite")
 	var all []event
 	page := 1
 
@@ -66,69 +72,88 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, erro
 			"https://www.eventbriteapi.com/v3/organizers/%s/events/?status=live&expand=venue,ticket_availability&page=%d",
 			orgID, page,
 		)
+		log.Printf("fetching page %d from EventBrite", page)
 		req, _ := http.NewRequest("GET", url, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 
 		resp, err := client.Do(req)
 		if err != nil {
+			log.Printf("error making request to EventBrite: %v", err)
 			return nil, err
 		}
 		defer resp.Body.Close()
 
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("eventbrite status %d: %s", resp.StatusCode, string(body))
+			err := fmt.Errorf("eventbrite status %d: %s", resp.StatusCode, string(body))
+			log.Printf("error response from EventBrite: %v", err)
+			return nil, err
 		}
 
 		var r ebResp
 		if err := json.Unmarshal(body, &r); err != nil {
+			log.Printf("error parsing EventBrite response: %v", err)
 			return nil, err
 		}
 
+		log.Printf("fetched %d events from page %d", len(r.Events), page)
 		all = append(all, r.Events...)
 		if !r.Pagination.HasMoreItems {
+			log.Println("no more pages available")
 			break
 		}
 		page++
 	}
 
+	log.Printf("successfully fetched all %d live events", len(all))
 	return all, nil
 }
 
 func publishNtfy(client *http.Client, topicURL, msg string) error {
+	log.Println("publishing notification to ntfy")
 	req, _ := http.NewRequest("POST", topicURL, bytes.NewBufferString(msg))
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("error posting to ntfy: %v", err)
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ntfy status %d: %s", resp.StatusCode, string(b))
+		err := fmt.Errorf("ntfy status %d: %s", resp.StatusCode, string(b))
+		log.Printf("error response from ntfy: %v", err)
+		return err
 	}
 	return nil
 }
 
 func main() {
+	log.Println("starting lectures-notifier")
 	isLocal := os.Getenv("NTFY_TOPIC_URL") == ""
-	if !isLocal {
+	if isLocal {
+		log.Println("running in local mode")
+	} else {
+		log.Println("running in production mode")
 		sleepDuration := time.Duration(rand.Intn(41)+10) * time.Second
-		fmt.Printf("Sleeping for %v\n", sleepDuration)
+		log.Printf("sleeping for %v before proceeding", sleepDuration)
 		time.Sleep(sleepDuration)
 	}
 
+	log.Println("loading configuration from environment variables")
 	orgID := mustEnv("EVENTBRITE_ORGANIZER_ID")
 	token := mustEnv("EVENTBRITE_TOKEN")
+	log.Printf("loaded organizer ID: %s", orgID)
 
 	var ntfyTopicURL string
 	if !isLocal {
 		ntfyTopicURL = mustEnv("NTFY_TOPIC_URL")
+		log.Println("loaded ntfy topic URL")
 	}
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	all, err := fetchAllLiveEvents(httpClient, orgID, token)
 	if err != nil {
-		panic(err)
+		log.Fatalf("failed to fetch events: %v", err)
 	}
 
 	var matches []event
@@ -139,30 +164,37 @@ func main() {
 		matches = append(matches, e)
 	}
 
+	log.Printf("found %d events with available tickets", len(matches))
 	if len(matches) == 0 {
+		log.Println("no events with available tickets, exiting")
 		return
 	}
 
 	var b strings.Builder
 	b.WriteString("Lectures On Tap: tickets available\n")
 	for _, e := range matches {
-		timeStr := ""
+		var timeStr string
 		if len(e.Start.Local) >= len("2006-01-02T15:04:05") {
-			timeStr = e.Start.Local[len("2006-01-02T") : len("2006-01-02T")+5]
+			t, err := time.Parse("2006-01-02T15:04:05", e.Start.Local)
+			if err == nil {
+				timeStr = t.Format("Mon, Jan 2 at 15:04")
+			}
 		}
 		city := ""
 		if e.Venue != nil {
 			city = e.Venue.Address.City
 		}
-		b.WriteString(fmt.Sprintf("- %s (%s) %s %s\n", e.Name.Text, timeStr, city, e.URL))
+		fmt.Fprintf(&b, "- %s (%s) %s %s\n", e.Name.Text, timeStr, city, e.URL)
 	}
 
 	msg := b.String()
 	if isLocal {
-		fmt.Print(msg)
+		log.Println("local mode: printing message to stdout")
+		log.Print(msg)
 	} else {
 		if err := publishNtfy(httpClient, ntfyTopicURL, msg); err != nil {
-			panic(err)
+			log.Fatalf("failed to publish notification: %v", err)
 		}
+		log.Println("notification published successfully")
 	}
 }
