@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  build:
+    desc: Build the Go binary
+    cmds:
+      - go build ./cmd/lectures-notifier
+
+  run:
+    desc: Load .env and run the binary
+    cmds:
+      - set -a; source .env; set +a; ./lectures-notifier
+
+  default:
+    desc: Build the Go project
+    cmds:
+      - task: build
