@@ -63,7 +63,7 @@ func isTicketsAvailable(e event) bool {
 }
 
 func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, error) {
-	log.Println("starting to fetch live events from EventBrite")
+	log.Printf("starting to fetch live events from EventBrite for organizer %s", orgID)
 	var all []event
 	page := 1
 
@@ -110,7 +110,7 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, erro
 }
 
 func publishNtfy(client *http.Client, topicURL, msg string) error {
-	log.Println("publishing notification to ntfy")
+	log.Printf("publishing notification to ntfy topic (message size: %d bytes)", len(msg))
 	req, _ := http.NewRequest("POST", topicURL, bytes.NewBufferString(msg))
 	resp, err := client.Do(req)
 	if err != nil {
@@ -147,7 +147,7 @@ func main() {
 	var ntfyTopicURL string
 	if !isLocal {
 		ntfyTopicURL = mustEnv("NTFY_TOPIC_URL")
-		log.Println("loaded ntfy topic URL")
+		log.Printf("loaded ntfy topic URL: %s", ntfyTopicURL)
 	}
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
@@ -195,6 +195,6 @@ func main() {
 		if err := publishNtfy(httpClient, ntfyTopicURL, msg); err != nil {
 			log.Fatalf("failed to publish notification: %v", err)
 		}
-		log.Println("notification published successfully")
+		log.Printf("notification published successfully (%d bytes)", len(msg))
 	}
 }
