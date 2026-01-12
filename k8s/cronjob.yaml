@@ -19,6 +19,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -41,6 +42,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -63,6 +65,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -85,6 +88,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -111,6 +115,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -133,6 +138,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -155,6 +161,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -177,6 +184,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -203,6 +211,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -225,6 +234,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -247,6 +257,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
@@ -269,6 +280,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
+              imagePullPolicy: Always
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
