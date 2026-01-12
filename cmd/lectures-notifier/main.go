@@ -339,8 +339,6 @@ func main() {
 		return
 	}
 
-	var b strings.Builder
-	b.WriteString("Lectures On Tap: tickets available\n")
 	for _, e := range notifyEvents {
 		var timeStr string
 		if len(e.Start.Local) >= len("2006-01-02T15:04:05") {
@@ -353,17 +351,17 @@ func main() {
 		if e.Venue != nil {
 			city = e.Venue.Address.City
 		}
-		fmt.Fprintf(&b, "- %s (%s) %s %s\n", e.Name.Text, timeStr, city, e.URL)
-	}
+		msg := fmt.Sprintf("%s %s (%s) %s", city, e.Name.Text, timeStr, e.URL)
 
-	msg := b.String()
-	if isLocal {
-		log.Println("local mode: printing message to stdout")
-		log.Print(msg)
-	} else {
-		if err := publishNtfy(httpClient, ntfyTopicURL, msg, ntfyToken); err != nil {
-			log.Fatalf("failed to publish notification: %v", err)
+		if isLocal {
+			log.Println("local mode: printing message to stdout")
+			log.Println(msg)
+		} else {
+			if err := publishNtfy(httpClient, ntfyTopicURL, msg, ntfyToken); err != nil {
+				log.Printf("failed to publish notification for event %s: %v", e.ID, err)
+				continue
+			}
+			log.Printf("notification published successfully for event %s (%d bytes)", e.ID, len(msg))
 		}
-		log.Printf("notification published successfully (%d bytes)", len(msg))
 	}
 }
