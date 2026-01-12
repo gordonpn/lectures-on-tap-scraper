@@ -194,11 +194,11 @@ func main() {
 	}
 
 	msg := b.String()
-	if isLocal {, ntfyToken
+	if isLocal {
 		log.Println("local mode: printing message to stdout")
 		log.Print(msg)
 	} else {
-		if err := publishNtfy(httpClient, ntfyTopicURL, msg); err != nil {
+		if err := publishNtfy(httpClient, ntfyTopicURL, msg, ntfyToken); err != nil {
 			log.Fatalf("failed to publish notification: %v", err)
 		}
 		log.Printf("notification published successfully (%d bytes)", len(msg))
