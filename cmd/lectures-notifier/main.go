@@ -109,9 +109,13 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, erro
 	return all, nil
 }
 
-func publishNtfy(client *http.Client, topicURL, msg string) error {
+func publishNtfy(client *http.Client, topicURL, msg, token string) error {
 	log.Printf("publishing notification to ntfy topic (message size: %d bytes)", len(msg))
 	req, _ := http.NewRequest("POST", topicURL, bytes.NewBufferString(msg))
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+		log.Println("bearer token added to ntfy request")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("error posting to ntfy: %v", err)
@@ -144,10 +148,12 @@ func main() {
 	token := mustEnv("EVENTBRITE_TOKEN")
 	log.Printf("loaded organizer ID: %s", orgID)
 
-	var ntfyTopicURL string
+	var ntfyTopicURL, ntfyToken string
 	if !isLocal {
 		ntfyTopicURL = mustEnv("NTFY_TOPIC_URL")
 		log.Printf("loaded ntfy topic URL: %s", ntfyTopicURL)
+		ntfyToken = mustEnv("NTFY_TOKEN")
+		log.Println("ntfy bearer token configured")
 	}
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
@@ -188,7 +194,7 @@ func main() {
 	}
 
 	msg := b.String()
-	if isLocal {
+	if isLocal {, ntfyToken
 		log.Println("local mode: printing message to stdout")
 		log.Print(msg)
 	} else {

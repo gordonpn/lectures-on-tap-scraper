@@ -1,6 +1,3 @@
-# Assumes you already have:
-# - secret: lectures-notifier-secrets (EVENTBRITE_ORGANIZER_ID, EVENTBRITE_TOKEN, NTFY_TOPIC_URL)
-
 # =========================
 # ET (Boston + NYC) — through 18:30
 # =========================
