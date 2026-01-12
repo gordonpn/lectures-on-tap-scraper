@@ -1,4 +1,19 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: lectures-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
   ntfy:
     image: binwiederhier/ntfy:latest
     container_name: lectures-ntfy
@@ -25,15 +40,19 @@ services:
       dockerfile: Dockerfile
     container_name: lectures-notifier
     depends_on:
+      redis:
+        condition: service_healthy
       ntfy:
         condition: service_healthy
     env_file: .env
     environment:
       NTFY_TOPIC_URL: http://ntfy:80/lectures-on-tap
+      REDIS_ADDR: redis:6379
     restart: on-failure
     # For testing: uncomment to run once
     # restart: "no"
 
 volumes:
+  redis-data:
   ntfy-data:
   ntfy-etc:

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,8 +10,11 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type ebResp struct {
@@ -60,6 +64,86 @@ func isTicketsAvailable(e event) bool {
 		return false
 	}
 	return *e.TicketAvailability.HasAvailableTickets
+}
+
+func envBool(key string, defaultVal bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return defaultVal
+	}
+}
+
+func envDurationHours(key string, defaultVal time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	h, err := strconv.Atoi(v)
+	if err != nil || h <= 0 {
+		return defaultVal
+	}
+	return time.Duration(h) * time.Hour
+}
+
+func parseEventStart(e event) (time.Time, bool) {
+	if len(e.Start.Local) < len("2006-01-02T15:04:05") {
+		return time.Time{}, false
+	}
+	t, err := time.Parse("2006-01-02T15:04:05", e.Start.Local)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+type dedupeConfig struct {
+	ttlCap           time.Duration
+	reminderCooldown time.Duration
+	deleteOnSoldOut  bool
+	extraBuffer      time.Duration
+	minTTL           time.Duration
+}
+
+func dedupeKey(eventID string) string {
+	return "lot:event:" + eventID + ":notified"
+}
+
+func dedupeTTL(start time.Time, hasStart bool, cfg dedupeConfig) time.Duration {
+	ttl := cfg.ttlCap
+	if hasStart {
+		ttl = time.Until(start) + cfg.extraBuffer
+		if ttl < cfg.minTTL {
+			ttl = cfg.minTTL
+		}
+		if ttl > cfg.ttlCap {
+			ttl = cfg.ttlCap
+		}
+	}
+	if cfg.reminderCooldown > 0 && ttl > cfg.reminderCooldown {
+		ttl = cfg.reminderCooldown
+	}
+	return ttl
+}
+
+func newRedisClient(isLocal bool) *redis.Client {
+	addr := strings.TrimSpace(os.Getenv("REDIS_ADDR"))
+	if addr == "" {
+		if !isLocal {
+			log.Println("redis dedupe disabled: REDIS_ADDR not set")
+		}
+		return nil
+	}
+	password := os.Getenv("REDIS_PASSWORD")
+	log.Printf("redis dedupe enabled at %s", addr)
+	return redis.NewClient(&redis.Options{Addr: addr, Password: password})
 }
 
 func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, error) {
@@ -152,8 +236,20 @@ func main() {
 	if !isLocal {
 		ntfyTopicURL = mustEnv("NTFY_TOPIC_URL")
 		log.Printf("loaded ntfy topic URL: %s", ntfyTopicURL)
-		ntfyToken = mustEnv("NTFY_TOKEN")
-		log.Println("ntfy bearer token configured")
+
+		// Token required for production, optional for local/docker-compose
+		isLocalNtfy := strings.Contains(ntfyTopicURL, "localhost") || strings.Contains(ntfyTopicURL, "ntfy:80")
+		if isLocalNtfy {
+			ntfyToken = strings.TrimSpace(os.Getenv("NTFY_TOKEN"))
+			if ntfyToken != "" {
+				log.Println("ntfy bearer token configured")
+			} else {
+				log.Println("ntfy bearer token not set (optional for local ntfy)")
+			}
+		} else {
+			ntfyToken = mustEnv("NTFY_TOKEN")
+			log.Println("ntfy bearer token configured")
+		}
 	}
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
@@ -162,23 +258,90 @@ func main() {
 		log.Fatalf("failed to fetch events: %v", err)
 	}
 
-	var matches []event
-	for _, e := range all {
-		if !isTicketsAvailable(e) {
-			continue
+	ctx := context.Background()
+	redisClient := newRedisClient(isLocal)
+
+	var dedupeCfg dedupeConfig
+	if redisClient != nil {
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			log.Printf("redis ping failed, disabling dedupe: %v", err)
+			redisClient = nil
+		} else {
+			dedupeCfg = dedupeConfig{
+				ttlCap:           envDurationHours("DEDUP_MAX_TTL_HOURS", 14*24*time.Hour),
+				reminderCooldown: envDurationHours("DEDUP_REMINDER_HOURS", 0),
+				deleteOnSoldOut:  envBool("DEDUP_DELETE_ON_SOLD_OUT", true),
+				extraBuffer:      envDurationHours("DEDUP_EXTRA_BUFFER_HOURS", time.Hour),
+				minTTL:           envDurationHours("DEDUP_MIN_TTL_HOURS", time.Hour),
+			}
+			if dedupeCfg.ttlCap <= 0 {
+				dedupeCfg.ttlCap = 14 * 24 * time.Hour
+			}
+			if dedupeCfg.minTTL <= 0 {
+				dedupeCfg.minTTL = time.Hour
+			}
+			log.Printf("redis dedupe config: maxTTL=%v reminderCooldown=%v deleteOnSoldOut=%v extraBuffer=%v minTTL=%v",
+				dedupeCfg.ttlCap, dedupeCfg.reminderCooldown, dedupeCfg.deleteOnSoldOut, dedupeCfg.extraBuffer, dedupeCfg.minTTL)
 		}
-		matches = append(matches, e)
 	}
 
-	log.Printf("found %d events with available tickets", len(matches))
-	if len(matches) == 0 {
-		log.Println("no events with available tickets, exiting")
+	now := time.Now()
+	var notifyEvents []event
+	availableCount := 0
+
+	for _, e := range all {
+		redisKey := ""
+		if redisClient != nil {
+			redisKey = dedupeKey(e.ID)
+		}
+
+		available := isTicketsAvailable(e)
+		if !available {
+			if redisClient != nil && dedupeCfg.deleteOnSoldOut {
+				deleted, err := redisClient.Del(ctx, redisKey).Result()
+				if err != nil {
+					log.Printf("redis delete failed for %s (event %s): %v", redisKey, e.ID, err)
+				} else if deleted > 0 {
+					log.Printf("redis deleted key %s for sold-out event %s (%s)", redisKey, e.ID, e.Name.Text)
+				}
+			}
+			continue
+		}
+
+		availableCount++
+		startTime, hasStart := parseEventStart(e)
+		if hasStart && startTime.Before(now) {
+			continue
+		}
+
+		shouldNotify := true
+		if redisClient != nil {
+			ttl := dedupeTTL(startTime, hasStart, dedupeCfg)
+			set, err := redisClient.SetNX(ctx, redisKey, "1", ttl).Result()
+			if err != nil {
+				log.Printf("redis setnx failed for %s (event %s): %v (proceeding to notify)", redisKey, e.ID, err)
+			} else if set {
+				log.Printf("redis set key %s with TTL %v for event %s (%s)", redisKey, ttl, e.ID, e.Name.Text)
+			} else {
+				log.Printf("redis dedupe skip: key %s already exists for event %s (%s)", redisKey, e.ID, e.Name.Text)
+				shouldNotify = false
+			}
+		}
+
+		if shouldNotify {
+			notifyEvents = append(notifyEvents, e)
+		}
+	}
+
+	log.Printf("found %d events with available tickets (%d new)", availableCount, len(notifyEvents))
+	if len(notifyEvents) == 0 {
+		log.Println("no new events to notify, exiting")
 		return
 	}
 
 	var b strings.Builder
 	b.WriteString("Lectures On Tap: tickets available\n")
-	for _, e := range matches {
+	for _, e := range notifyEvents {
 		var timeStr string
 		if len(e.Start.Local) >= len("2006-01-02T15:04:05") {
 			t, err := time.Parse("2006-01-02T15:04:05", e.Start.Local)
