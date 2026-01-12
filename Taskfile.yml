@@ -17,3 +17,13 @@ tasks:
     desc: Build the Go project
     cmds:
       - task: build
+
+  k8s:create-secret:
+    desc: Create or update lectures-notifier-secrets from .env
+    cmds:
+      - ./scripts/k8s-create-secret.sh
+
+  k8s:docker-desktop-smoke:
+    desc: Apply CronJobs to docker-desktop, patch to 1m, run one job, tail logs
+    cmds:
+      - ./scripts/k8s-docker-desktop-smoke.sh

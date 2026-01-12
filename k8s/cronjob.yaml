@@ -1,0 +1,277 @@
+# Assumes you already have:
+# - secret: lectures-notifier-secrets (EVENTBRITE_ORGANIZER_ID, EVENTBRITE_TOKEN, NTFY_TOPIC_URL)
+
+# =========================
+# ET (Boston + NYC) — through 18:30
+# =========================
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-et-drop-1m
+spec:
+  timeZone: "America/New_York"
+  schedule: "0-10 10 * * *"   # 10:00..10:10 every minute
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-et-10-15to10-55-5m
+spec:
+  timeZone: "America/New_York"
+  schedule: "15-59/5 10 * * *" # 10:15..10:55 every 5 min
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-et-11to17-5m
+spec:
+  timeZone: "America/New_York"
+  schedule: "*/5 11-17 * * *"  # 11:00..17:55 every 5 min
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-et-18to18-30-5m
+spec:
+  timeZone: "America/New_York"
+  schedule: "0-30/5 18 * * *"  # 18:00..18:30 every 5 min
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+
+# =========================
+# CT (Chicago) — through 18:30
+# =========================
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-ct-drop-1m
+spec:
+  timeZone: "America/Chicago"
+  schedule: "0-10 10 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-ct-10-15to10-55-5m
+spec:
+  timeZone: "America/Chicago"
+  schedule: "15-59/5 10 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-ct-11to17-5m
+spec:
+  timeZone: "America/Chicago"
+  schedule: "*/5 11-17 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-ct-18to18-30-5m
+spec:
+  timeZone: "America/Chicago"
+  schedule: "0-30/5 18 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+
+# =========================
+# PT (SF + LA) — through 19:30
+# =========================
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-pt-drop-1m
+spec:
+  timeZone: "America/Los_Angeles"
+  schedule: "0-10 10 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-pt-10-15to10-55-5m
+spec:
+  timeZone: "America/Los_Angeles"
+  schedule: "15-59/5 10 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-pt-11to18-5m
+spec:
+  timeZone: "America/Los_Angeles"
+  schedule: "*/5 11-18 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lectures-notifier-pt-19to19-30-5m
+spec:
+  timeZone: "America/Los_Angeles"
+  schedule: "0-30/5 19 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notifier
+              image: ghcr.io/gordonpn/lectures-notifier:main
+              envFrom:
+                - secretRef:
+                    name: lectures-notifier-secrets
