@@ -160,10 +160,26 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, erro
 		req, _ := http.NewRequest("GET", url, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("error making request to EventBrite: %v", err)
-			return nil, err
+		var resp *http.Response
+		var err error
+		maxRetries := 3
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			startTime := time.Now()
+			resp, err = client.Do(req)
+			elapsed := time.Since(startTime)
+			log.Printf("EventBrite request attempt %d took %v", attempt, elapsed)
+
+			if err == nil {
+				break
+			}
+			if attempt < maxRetries {
+				waitTime := time.Duration(1<<uint(attempt-1)) * time.Second
+				log.Printf("error making request to EventBrite (attempt %d): %v, retrying in %v", attempt, err, waitTime)
+				time.Sleep(waitTime)
+			} else {
+				log.Printf("error making request to EventBrite after %d attempts: %v", maxRetries, err)
+				return nil, err
+			}
 		}
 		defer resp.Body.Close()
 
@@ -252,7 +268,7 @@ func main() {
 		}
 	}
 
-	httpClient := &http.Client{Timeout: 15 * time.Second}
+	httpClient := &http.Client{Timeout: 45 * time.Second}
 	all, err := fetchAllLiveEvents(httpClient, orgID, token)
 	if err != nil {
 		log.Fatalf("failed to fetch events: %v", err)
