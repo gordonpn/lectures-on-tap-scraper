@@ -428,7 +428,8 @@ func main() {
 			// Publish to city-specific topic if city is known
 			cityLower := strings.ToLower(strings.TrimSpace(city))
 			if cityLower != "" {
-				cityTopicURL := ntfyTopicURL + url.PathEscape(cityLower)
+				base := strings.TrimSuffix(ntfyTopicURL, "-")
+				cityTopicURL := fmt.Sprintf("%s-%s", base, url.PathEscape(cityLower))
 				if err := publishNtfy(httpClient, cityTopicURL, msg, ntfyToken); err != nil {
 					log.Printf("failed to publish city-specific notification for event %s (city=%s): %v", e.ID, cityLower, err)
 					continue
