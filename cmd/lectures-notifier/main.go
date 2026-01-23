@@ -9,7 +9,6 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -423,18 +422,29 @@ func main() {
 				log.Printf("failed to publish notification for event %s: %v", e.ID, err)
 				continue
 			}
-			log.Printf("notification published to base topic for event %s (%d bytes)", e.ID, len(msg))
+			log.Printf("ntfy publish ok | topic=%s | bytes=%d | msg=%s", ntfyTopicURL, len(msg), msg)
 
 			// Publish to city-specific topic if city is known
 			cityLower := strings.ToLower(strings.TrimSpace(city))
 			if cityLower != "" {
 				base := strings.TrimSuffix(ntfyTopicURL, "-")
-				cityTopicURL := fmt.Sprintf("%s-%s", base, url.PathEscape(cityLower))
+				var b strings.Builder
+				for _, r := range cityLower {
+					if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+						b.WriteRune(r)
+					}
+				}
+				citySlug := b.String()
+				if citySlug == "" {
+					log.Printf("skipping city-specific publish for event %s: derived empty city slug", e.ID)
+					continue
+				}
+				cityTopicURL := fmt.Sprintf("%s-%s", base, citySlug)
 				if err := publishNtfy(httpClient, cityTopicURL, msg, ntfyToken); err != nil {
 					log.Printf("failed to publish city-specific notification for event %s (city=%s): %v", e.ID, cityLower, err)
 					continue
 				}
-				log.Printf("notification also published to city topic '%s' for event %s", cityLower, e.ID)
+				log.Printf("ntfy publish ok | topic=%s | city=%s | bytes=%d | msg=%s", cityTopicURL, cityLower, len(msg), msg)
 			}
 		}
 	}
