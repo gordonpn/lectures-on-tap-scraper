@@ -38,6 +38,7 @@ type event struct {
 			Address1                string `json:"address_1"`
 			Address2                string `json:"address_2"`
 			City                    string `json:"city"`
+			Region                  string `json:"region"`
 			LocalizedAddressDisplay string `json:"localized_address_display"`
 			PostalCode              string `json:"postal_code"`
 		} `json:"address"`
@@ -424,27 +425,31 @@ func main() {
 			}
 			log.Printf("ntfy publish ok | topic=%s | bytes=%d | msg=%s", ntfyTopicURL, len(msg), msg)
 
-			// Publish to city-specific topic if city is known
-			cityLower := strings.ToLower(strings.TrimSpace(city))
-			if cityLower != "" {
+			// Publish to state-specific topic if state is known
+			state := ""
+			if e.Venue != nil {
+				state = e.Venue.Address.Region
+			}
+			stateLower := strings.ToLower(strings.TrimSpace(state))
+			if stateLower != "" {
 				base := strings.TrimSuffix(ntfyTopicURL, "-")
 				var b strings.Builder
-				for _, r := range cityLower {
+				for _, r := range stateLower {
 					if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 						b.WriteRune(r)
 					}
 				}
-				citySlug := b.String()
-				if citySlug == "" {
-					log.Printf("skipping city-specific publish for event %s: derived empty city slug", e.ID)
+				stateSlug := b.String()
+				if stateSlug == "" {
+					log.Printf("skipping state-specific publish for event %s: derived empty state slug", e.ID)
 					continue
 				}
-				cityTopicURL := fmt.Sprintf("%s-%s", base, citySlug)
-				if err := publishNtfy(httpClient, cityTopicURL, msg, ntfyToken); err != nil {
-					log.Printf("failed to publish city-specific notification for event %s (city=%s): %v", e.ID, cityLower, err)
+				stateTopicURL := fmt.Sprintf("%s-%s", base, stateSlug)
+				if err := publishNtfy(httpClient, stateTopicURL, msg, ntfyToken); err != nil {
+					log.Printf("failed to publish state-specific notification for event %s (state=%s): %v", e.ID, stateLower, err)
 					continue
 				}
-				log.Printf("ntfy publish ok | topic=%s | city=%s | bytes=%d | msg=%s", cityTopicURL, cityLower, len(msg), msg)
+				log.Printf("ntfy publish ok | topic=%s | state=%s | bytes=%d | msg=%s", stateTopicURL, stateLower, len(msg), msg)
 			}
 		}
 	}

@@ -37,4 +37,4 @@ Useful overrides:
 ## Todo
 
 - [x] Handle redis rate limit
-- [ ] Split topics by cities
+- [x] Split topics by cities
