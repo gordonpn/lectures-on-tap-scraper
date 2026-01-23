@@ -33,3 +33,8 @@ Useful overrides:
 - `NAMESPACE=<ns>` — target namespace
 - `IMAGE=<image>` — container image tag (defaults to `lectures-notifier:main`)
 - `CJ_NAME=<cronjob-name>` — which CronJob to trigger
+
+## Todo
+
+- [x] Handle redis rate limit
+- [ ] Split topics by cities

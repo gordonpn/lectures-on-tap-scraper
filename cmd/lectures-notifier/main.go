@@ -209,26 +209,70 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, erro
 	return all, nil
 }
 
+func retryAfterDelay(header string, attempt int, base time.Duration) time.Duration {
+	if header != "" {
+		if secs, err := strconv.Atoi(header); err == nil && secs >= 0 {
+			return time.Duration(secs) * time.Second
+		}
+		if t, err := http.ParseTime(header); err == nil {
+			d := time.Until(t)
+			if d > 0 {
+				return d
+			}
+		}
+	}
+
+	backoff := base * time.Duration(1<<uint(attempt-1))
+	jitter := time.Duration(rand.Int63n(int64(base)))
+	return backoff + jitter
+}
+
 func publishNtfy(client *http.Client, topicURL, msg, token string) error {
 	log.Printf("publishing notification to ntfy topic (message size: %d bytes)", len(msg))
-	req, _ := http.NewRequest("POST", topicURL, bytes.NewBufferString(msg))
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-		log.Println("bearer token added to ntfy request")
+
+	const maxAttempts = 5
+	baseDelay := time.Second
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, _ := http.NewRequest("POST", topicURL, bytes.NewBufferString(msg))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("error posting to ntfy (attempt %d/%d): %v", attempt, maxAttempts, err)
+			if attempt == maxAttempts {
+				return err
+			}
+			wait := retryAfterDelay("", attempt, baseDelay)
+			time.Sleep(wait)
+			continue
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			wait := retryAfterDelay(resp.Header.Get("Retry-After"), attempt, baseDelay)
+			log.Printf("ntfy rate limited (attempt %d/%d), waiting %v before retry: %s", attempt, maxAttempts, wait, string(body))
+			if attempt == maxAttempts {
+				return fmt.Errorf("ntfy rate limited after %d attempts: %s", maxAttempts, string(body))
+			}
+			time.Sleep(wait)
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			err := fmt.Errorf("ntfy status %d: %s", resp.StatusCode, string(body))
+			log.Printf("error response from ntfy: %v", err)
+			return err
+		}
+
+		return nil
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("error posting to ntfy: %v", err)
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		err := fmt.Errorf("ntfy status %d: %s", resp.StatusCode, string(b))
-		log.Printf("error response from ntfy: %v", err)
-		return err
-	}
-	return nil
+
+	return fmt.Errorf("ntfy publish failed after %d attempts", maxAttempts)
 }
 
 func main() {
