@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -417,11 +418,23 @@ func main() {
 			log.Println("local mode: printing message to stdout")
 			log.Println(msg)
 		} else {
+			// Publish to base topic
 			if err := publishNtfy(httpClient, ntfyTopicURL, msg, ntfyToken); err != nil {
 				log.Printf("failed to publish notification for event %s: %v", e.ID, err)
 				continue
 			}
-			log.Printf("notification published successfully for event %s (%d bytes)", e.ID, len(msg))
+			log.Printf("notification published to base topic for event %s (%d bytes)", e.ID, len(msg))
+
+			// Publish to city-specific topic if city is known
+			cityLower := strings.ToLower(strings.TrimSpace(city))
+			if cityLower != "" {
+				cityTopicURL := ntfyTopicURL + url.PathEscape(cityLower)
+				if err := publishNtfy(httpClient, cityTopicURL, msg, ntfyToken); err != nil {
+					log.Printf("failed to publish city-specific notification for event %s (city=%s): %v", e.ID, cityLower, err)
+					continue
+				}
+				log.Printf("notification also published to city topic '%s' for event %s", cityLower, e.ID)
+			}
 		}
 	}
 }
