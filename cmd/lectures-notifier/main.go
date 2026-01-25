@@ -311,11 +311,12 @@ func publishNtfy(client *http.Client, topicURL, msg, token string) error {
 }
 
 type appConfig struct {
-	isLocal      bool
-	orgID        string
-	token        string
-	ntfyTopicURL string
-	ntfyToken    string
+	isLocal             bool
+	orgID               string
+	token               string
+	ntfyTopicURL        string
+	ntfyToken           string
+	healthchecksPingURL string
 }
 
 func logModeAndSleep(isLocal bool) {
@@ -335,6 +336,11 @@ func loadConfig(isLocal bool) appConfig {
 	cfg.orgID = mustEnv("EVENTBRITE_ORGANIZER_ID")
 	cfg.token = mustEnv("EVENTBRITE_TOKEN")
 	log.Printf("loaded organizer ID: %s", cfg.orgID)
+
+	cfg.healthchecksPingURL = strings.TrimSpace(os.Getenv("HEALTHCHECKS_PING_URL"))
+	if cfg.healthchecksPingURL != "" {
+		log.Printf("healthchecks ping URL configured")
+	}
 
 	if isLocal {
 		return cfg
@@ -358,6 +364,63 @@ func loadConfig(isLocal bool) appConfig {
 	cfg.ntfyToken = mustEnv("NTFY_TOKEN")
 	log.Printf("ntfy bearer token configured (localNtfy=%t)", isLocalNtfy)
 	return cfg
+}
+
+func pingHealthchecks(client *http.Client, baseURL, suffix string) {
+	base := strings.TrimSpace(baseURL)
+	if base == "" {
+		return
+	}
+	url := strings.TrimRight(base, "/")
+	if suffix != "" {
+		url = url + "/" + suffix
+	}
+
+	req, _ := http.NewRequest("GET", url, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("healthchecks ping %q failed: %v", suffix, err)
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("healthchecks ping %q returned status %d", suffix, resp.StatusCode)
+	}
+}
+
+func runNotifier(httpClient *http.Client, cfg appConfig, isLocal bool) error {
+	all, err := fetchAllLiveEvents(httpClient, cfg.orgID, cfg.token)
+	if err != nil {
+		return fmt.Errorf("failed to fetch events: %w", err)
+	}
+
+	ctx := context.Background()
+	redisClient, dedupeCfg := initRedis(ctx, isLocal)
+	now := time.Now()
+	notifyEvents, availableCount := filterEvents(ctx, all, redisClient, dedupeCfg, now)
+
+	log.Printf("found %d events with available tickets (%d new)", availableCount, len(notifyEvents))
+	if len(notifyEvents) == 0 {
+		log.Printf("no new events to notify, exiting (availableCount=%d)", availableCount)
+		return nil
+	}
+
+	for _, e := range notifyEvents {
+		redisClient = ensureRedisForNotification(ctx, isLocal, redisClient)
+		if redisClient == nil {
+			continue
+		}
+		msg := formatEventMessage(e)
+		if isLocal {
+			log.Printf("local mode: printing message to stdout (event=%s bytes=%d)", e.ID, len(msg))
+			log.Println(msg)
+			continue
+		}
+		publishEventNotifications(httpClient, cfg, e, msg)
+	}
+
+	return nil
 }
 
 func buildDedupeConfig() dedupeConfig {
@@ -525,35 +588,12 @@ func main() {
 	isLocal := os.Getenv("NTFY_TOPIC_URL") == ""
 	logModeAndSleep(isLocal)
 	cfg := loadConfig(isLocal)
-
 	httpClient := &http.Client{Timeout: 45 * time.Second}
-	all, err := fetchAllLiveEvents(httpClient, cfg.orgID, cfg.token)
-	if err != nil {
-		log.Fatalf("failed to fetch events: %v", err)
-	}
 
-	ctx := context.Background()
-	redisClient, dedupeCfg := initRedis(ctx, isLocal)
-	now := time.Now()
-	notifyEvents, availableCount := filterEvents(ctx, all, redisClient, dedupeCfg, now)
-
-	log.Printf("found %d events with available tickets (%d new)", availableCount, len(notifyEvents))
-	if len(notifyEvents) == 0 {
-		log.Printf("no new events to notify, exiting (availableCount=%d)", availableCount)
-		return
+	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "start")
+	if err := runNotifier(httpClient, cfg, isLocal); err != nil {
+		pingHealthchecks(httpClient, cfg.healthchecksPingURL, "fail")
+		log.Fatalf("notifier run failed: %v", err)
 	}
-
-	for _, e := range notifyEvents {
-		redisClient = ensureRedisForNotification(ctx, isLocal, redisClient)
-		if redisClient == nil {
-			continue
-		}
-		msg := formatEventMessage(e)
-		if isLocal {
-			log.Printf("local mode: printing message to stdout (event=%s bytes=%d)", e.ID, len(msg))
-			log.Println(msg)
-			continue
-		}
-		publishEventNotifications(httpClient, cfg, e, msg)
-	}
+	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "")
 }
