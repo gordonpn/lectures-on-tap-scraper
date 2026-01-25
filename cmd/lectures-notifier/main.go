@@ -17,6 +17,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const (
+	maxRedisAttempts = 10
+	redisBaseDelay   = 2 * time.Second
+)
+
 type ebResp struct {
 	Events     []event `json:"events"`
 	Pagination struct {
@@ -305,88 +310,97 @@ func publishNtfy(client *http.Client, topicURL, msg, token string) error {
 	return fmt.Errorf("ntfy publish failed after %d attempts", maxAttempts)
 }
 
-func main() {
-	log.Printf("starting lectures-notifier (pid=%d)", os.Getpid())
-	isLocal := os.Getenv("NTFY_TOPIC_URL") == ""
+type appConfig struct {
+	isLocal      bool
+	orgID        string
+	token        string
+	ntfyTopicURL string
+	ntfyToken    string
+}
+
+func logModeAndSleep(isLocal bool) {
 	if isLocal {
 		log.Printf("running in local mode (isLocal=%t)", isLocal)
-	} else {
-		log.Printf("running in production mode (isLocal=%t)", isLocal)
-		sleepDuration := time.Duration(rand.Intn(41)+10) * time.Second
-		log.Printf("sleeping for %v before proceeding", sleepDuration)
-		time.Sleep(sleepDuration)
+		return
 	}
+	log.Printf("running in production mode (isLocal=%t)", isLocal)
+	sleepDuration := time.Duration(rand.Intn(41)+10) * time.Second
+	log.Printf("sleeping for %v before proceeding", sleepDuration)
+	time.Sleep(sleepDuration)
+}
 
+func loadConfig(isLocal bool) appConfig {
+	cfg := appConfig{isLocal: isLocal}
 	log.Printf("loading configuration from environment variables (isLocal=%t)", isLocal)
-	orgID := mustEnv("EVENTBRITE_ORGANIZER_ID")
-	token := mustEnv("EVENTBRITE_TOKEN")
-	log.Printf("loaded organizer ID: %s", orgID)
+	cfg.orgID = mustEnv("EVENTBRITE_ORGANIZER_ID")
+	cfg.token = mustEnv("EVENTBRITE_TOKEN")
+	log.Printf("loaded organizer ID: %s", cfg.orgID)
 
-	var ntfyTopicURL, ntfyToken string
-	if !isLocal {
-		ntfyTopicURL = mustEnv("NTFY_TOPIC_URL")
-		log.Printf("loaded ntfy topic URL: %s", ntfyTopicURL)
+	if isLocal {
+		return cfg
+	}
 
-		// Token required for production, optional for local/docker-compose
-		isLocalNtfy := strings.Contains(ntfyTopicURL, "localhost") || strings.Contains(ntfyTopicURL, "ntfy:80")
-		if isLocalNtfy {
-			ntfyToken = strings.TrimSpace(os.Getenv("NTFY_TOKEN"))
-			if ntfyToken != "" {
-				log.Printf("ntfy bearer token configured (localNtfy=%t)", isLocalNtfy)
-			} else {
-				log.Printf("ntfy bearer token not set (optional for local ntfy, localNtfy=%t)", isLocalNtfy)
-			}
-		} else {
-			ntfyToken = mustEnv("NTFY_TOKEN")
+	cfg.ntfyTopicURL = mustEnv("NTFY_TOPIC_URL")
+	log.Printf("loaded ntfy topic URL: %s", cfg.ntfyTopicURL)
+
+	// Token required for production, optional for local/docker-compose
+	isLocalNtfy := strings.Contains(cfg.ntfyTopicURL, "localhost") || strings.Contains(cfg.ntfyTopicURL, "ntfy:80")
+	if isLocalNtfy {
+		cfg.ntfyToken = strings.TrimSpace(os.Getenv("NTFY_TOKEN"))
+		if cfg.ntfyToken != "" {
 			log.Printf("ntfy bearer token configured (localNtfy=%t)", isLocalNtfy)
-		}
-	}
-
-	httpClient := &http.Client{Timeout: 45 * time.Second}
-	all, err := fetchAllLiveEvents(httpClient, orgID, token)
-	if err != nil {
-		log.Fatalf("failed to fetch events: %v", err)
-	}
-
-	ctx := context.Background()
-	redisClient := newRedisClient(isLocal)
-
-	// Extensive retry logic for Redis connection
-	const maxRedisAttempts = 10
-	const redisBaseDelay = 2 * time.Second
-
-	var dedupeCfg dedupeConfig
-	if redisClient != nil {
-		log.Printf("attempting to establish redis connection with extensive retries (maxAttempts=%d baseDelay=%v)", maxRedisAttempts, redisBaseDelay)
-		verifiedClient, err := retryRedisConnection(ctx, redisClient, maxRedisAttempts, redisBaseDelay)
-		if err != nil {
-			log.Printf("redis connection failed after extensive retries, disabling dedupe: %v", err)
-			redisClient = nil
 		} else {
-			redisClient = verifiedClient
-			dedupeCfg = dedupeConfig{
-				ttlCap:           envDurationHours("DEDUP_MAX_TTL_HOURS", 14*24*time.Hour),
-				reminderCooldown: envDurationHours("DEDUP_REMINDER_HOURS", 0),
-				deleteOnSoldOut:  envBool("DEDUP_DELETE_ON_SOLD_OUT", true),
-				extraBuffer:      envDurationHours("DEDUP_EXTRA_BUFFER_HOURS", time.Hour),
-				minTTL:           envDurationHours("DEDUP_MIN_TTL_HOURS", time.Hour),
-			}
-			if dedupeCfg.ttlCap <= 0 {
-				dedupeCfg.ttlCap = 14 * 24 * time.Hour
-			}
-			if dedupeCfg.minTTL <= 0 {
-				dedupeCfg.minTTL = time.Hour
-			}
-			log.Printf("redis dedupe config: maxTTL=%v reminderCooldown=%v deleteOnSoldOut=%v extraBuffer=%v minTTL=%v",
-				dedupeCfg.ttlCap, dedupeCfg.reminderCooldown, dedupeCfg.deleteOnSoldOut, dedupeCfg.extraBuffer, dedupeCfg.minTTL)
+			log.Printf("ntfy bearer token not set (optional for local ntfy, localNtfy=%t)", isLocalNtfy)
 		}
+		return cfg
 	}
 
-	now := time.Now()
+	cfg.ntfyToken = mustEnv("NTFY_TOKEN")
+	log.Printf("ntfy bearer token configured (localNtfy=%t)", isLocalNtfy)
+	return cfg
+}
+
+func buildDedupeConfig() dedupeConfig {
+	dedupeCfg := dedupeConfig{
+		ttlCap:           envDurationHours("DEDUP_MAX_TTL_HOURS", 14*24*time.Hour),
+		reminderCooldown: envDurationHours("DEDUP_REMINDER_HOURS", 0),
+		deleteOnSoldOut:  envBool("DEDUP_DELETE_ON_SOLD_OUT", true),
+		extraBuffer:      envDurationHours("DEDUP_EXTRA_BUFFER_HOURS", time.Hour),
+		minTTL:           envDurationHours("DEDUP_MIN_TTL_HOURS", time.Hour),
+	}
+	if dedupeCfg.ttlCap <= 0 {
+		dedupeCfg.ttlCap = 14 * 24 * time.Hour
+	}
+	if dedupeCfg.minTTL <= 0 {
+		dedupeCfg.minTTL = time.Hour
+	}
+	return dedupeCfg
+}
+
+func initRedis(ctx context.Context, isLocal bool) (*redis.Client, dedupeConfig) {
+	redisClient := newRedisClient(isLocal)
+	if redisClient == nil {
+		return nil, dedupeConfig{}
+	}
+
+	log.Printf("attempting to establish redis connection with extensive retries (maxAttempts=%d baseDelay=%v)", maxRedisAttempts, redisBaseDelay)
+	verifiedClient, err := retryRedisConnection(ctx, redisClient, maxRedisAttempts, redisBaseDelay)
+	if err != nil {
+		log.Printf("redis connection failed after extensive retries, disabling dedupe: %v", err)
+		return nil, dedupeConfig{}
+	}
+
+	dedupeCfg := buildDedupeConfig()
+	log.Printf("redis dedupe config: maxTTL=%v reminderCooldown=%v deleteOnSoldOut=%v extraBuffer=%v minTTL=%v",
+		dedupeCfg.ttlCap, dedupeCfg.reminderCooldown, dedupeCfg.deleteOnSoldOut, dedupeCfg.extraBuffer, dedupeCfg.minTTL)
+	return verifiedClient, dedupeCfg
+}
+
+func filterEvents(ctx context.Context, events []event, redisClient *redis.Client, dedupeCfg dedupeConfig, now time.Time) ([]event, int) {
 	var notifyEvents []event
 	availableCount := 0
 
-	for _, e := range all {
+	for _, e := range events {
 		redisKey := ""
 		if redisClient != nil {
 			redisKey = dedupeKey(e.ID)
@@ -430,6 +444,99 @@ func main() {
 		}
 	}
 
+	return notifyEvents, availableCount
+}
+
+func ensureRedisForNotification(ctx context.Context, isLocal bool, redisClient *redis.Client) *redis.Client {
+	if redisClient != nil {
+		return redisClient
+	}
+	log.Printf("redis unavailable, attempting reconnection before sending notification")
+	tempClient := newRedisClient(isLocal)
+	if tempClient == nil {
+		log.Printf("redis still unavailable, skipping notification")
+		return nil
+	}
+	verifiedClient, err := retryRedisConnection(ctx, tempClient, maxRedisAttempts, redisBaseDelay)
+	if err != nil {
+		log.Printf("redis reconnection failed, skipping notification: %v", err)
+		return nil
+	}
+	log.Printf("redis connection restored; continuing with notifications")
+	return verifiedClient
+}
+
+func formatEventMessage(e event) string {
+	timeStr := ""
+	if t, ok := parseEventStart(e); ok {
+		timeStr = t.Format("Mon, Jan 2 at 15:04")
+	}
+	city := ""
+	if e.Venue != nil {
+		city = e.Venue.Address.City
+	}
+	return fmt.Sprintf("%s %s (%s) %s", city, e.Name.Text, timeStr, e.URL)
+}
+
+func stateTopicSlug(state string) string {
+	stateLower := strings.ToLower(strings.TrimSpace(state))
+	if stateLower == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range stateLower {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func publishEventNotifications(client *http.Client, cfg appConfig, e event, msg string) {
+	if err := publishNtfy(client, cfg.ntfyTopicURL, msg, cfg.ntfyToken); err != nil {
+		log.Printf("failed to publish notification for event %s: %v", e.ID, err)
+		return
+	}
+	log.Printf("ntfy publish ok | topic=%s | bytes=%d | msg=%s", cfg.ntfyTopicURL, len(msg), msg)
+
+	state := ""
+	if e.Venue != nil {
+		state = e.Venue.Address.Region
+	}
+	stateSlug := stateTopicSlug(state)
+	if stateSlug == "" {
+		if strings.TrimSpace(state) != "" {
+			log.Printf("skipping state-specific publish for event %s: derived empty state slug", e.ID)
+		}
+		return
+	}
+
+	base := strings.TrimSuffix(cfg.ntfyTopicURL, "-")
+	stateTopicURL := fmt.Sprintf("%s-%s", base, stateSlug)
+	if err := publishNtfy(client, stateTopicURL, msg, cfg.ntfyToken); err != nil {
+		log.Printf("failed to publish state-specific notification for event %s (state=%s): %v", e.ID, strings.ToLower(strings.TrimSpace(state)), err)
+		return
+	}
+	log.Printf("ntfy publish ok | topic=%s | state=%s | bytes=%d | msg=%s", stateTopicURL, strings.ToLower(strings.TrimSpace(state)), len(msg), msg)
+}
+
+func main() {
+	log.Printf("starting lectures-notifier (pid=%d)", os.Getpid())
+	isLocal := os.Getenv("NTFY_TOPIC_URL") == ""
+	logModeAndSleep(isLocal)
+	cfg := loadConfig(isLocal)
+
+	httpClient := &http.Client{Timeout: 45 * time.Second}
+	all, err := fetchAllLiveEvents(httpClient, cfg.orgID, cfg.token)
+	if err != nil {
+		log.Fatalf("failed to fetch events: %v", err)
+	}
+
+	ctx := context.Background()
+	redisClient, dedupeCfg := initRedis(ctx, isLocal)
+	now := time.Now()
+	notifyEvents, availableCount := filterEvents(ctx, all, redisClient, dedupeCfg, now)
+
 	log.Printf("found %d events with available tickets (%d new)", availableCount, len(notifyEvents))
 	if len(notifyEvents) == 0 {
 		log.Printf("no new events to notify, exiting (availableCount=%d)", availableCount)
@@ -437,71 +544,16 @@ func main() {
 	}
 
 	for _, e := range notifyEvents {
+		redisClient = ensureRedisForNotification(ctx, isLocal, redisClient)
 		if redisClient == nil {
-			log.Printf("redis unavailable, attempting reconnection before sending notification (event=%s)", e.ID)
-			tempClient := newRedisClient(isLocal)
-			if tempClient == nil {
-				log.Printf("redis still unavailable, skipping notification (event=%s)", e.ID)
-				continue
-			}
-			verifiedClient, err := retryRedisConnection(ctx, tempClient, maxRedisAttempts, redisBaseDelay)
-			if err != nil {
-				log.Printf("redis reconnection failed, skipping notification (event=%s): %v", e.ID, err)
-				continue
-			}
-			redisClient = verifiedClient
-			log.Printf("redis connection restored; continuing with notifications (event=%s)", e.ID)
+			continue
 		}
-		var timeStr string
-		if len(e.Start.Local) >= len("2006-01-02T15:04:05") {
-			t, err := time.Parse("2006-01-02T15:04:05", e.Start.Local)
-			if err == nil {
-				timeStr = t.Format("Mon, Jan 2 at 15:04")
-			}
-		}
-		city := ""
-		if e.Venue != nil {
-			city = e.Venue.Address.City
-		}
-		msg := fmt.Sprintf("%s %s (%s) %s", city, e.Name.Text, timeStr, e.URL)
-
+		msg := formatEventMessage(e)
 		if isLocal {
 			log.Printf("local mode: printing message to stdout (event=%s bytes=%d)", e.ID, len(msg))
 			log.Println(msg)
-		} else {
-			// Publish to base topic
-			if err := publishNtfy(httpClient, ntfyTopicURL, msg, ntfyToken); err != nil {
-				log.Printf("failed to publish notification for event %s: %v", e.ID, err)
-				continue
-			}
-			log.Printf("ntfy publish ok | topic=%s | bytes=%d | msg=%s", ntfyTopicURL, len(msg), msg)
-
-			// Publish to state-specific topic if state is known
-			state := ""
-			if e.Venue != nil {
-				state = e.Venue.Address.Region
-			}
-			stateLower := strings.ToLower(strings.TrimSpace(state))
-			if stateLower != "" {
-				base := strings.TrimSuffix(ntfyTopicURL, "-")
-				var b strings.Builder
-				for _, r := range stateLower {
-					if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-						b.WriteRune(r)
-					}
-				}
-				stateSlug := b.String()
-				if stateSlug == "" {
-					log.Printf("skipping state-specific publish for event %s: derived empty state slug", e.ID)
-					continue
-				}
-				stateTopicURL := fmt.Sprintf("%s-%s", base, stateSlug)
-				if err := publishNtfy(httpClient, stateTopicURL, msg, ntfyToken); err != nil {
-					log.Printf("failed to publish state-specific notification for event %s (state=%s): %v", e.ID, stateLower, err)
-					continue
-				}
-				log.Printf("ntfy publish ok | topic=%s | state=%s | bytes=%d | msg=%s", stateTopicURL, stateLower, len(msg), msg)
-			}
+			continue
 		}
+		publishEventNotifications(httpClient, cfg, e, msg)
 	}
 }
