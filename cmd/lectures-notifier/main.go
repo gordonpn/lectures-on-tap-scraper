@@ -138,13 +138,42 @@ func newRedisClient(isLocal bool) *redis.Client {
 	addr := strings.TrimSpace(os.Getenv("REDIS_ADDR"))
 	if addr == "" {
 		if !isLocal {
-			log.Println("redis dedupe disabled: REDIS_ADDR not set")
+			log.Printf("redis dedupe disabled: REDIS_ADDR not set (isLocal=%t)", isLocal)
 		}
 		return nil
 	}
 	password := os.Getenv("REDIS_PASSWORD")
 	log.Printf("redis dedupe enabled at %s", addr)
 	return redis.NewClient(&redis.Options{Addr: addr, Password: password})
+}
+
+// retryRedisConnection attempts to establish and verify a Redis connection with extensive retries
+func retryRedisConnection(ctx context.Context, redisClient *redis.Client, maxAttempts int, baseDelay time.Duration) (*redis.Client, error) {
+	if redisClient == nil {
+		return nil, fmt.Errorf("redis client is nil")
+	}
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := redisClient.Ping(ctx).Err()
+		if err == nil {
+			log.Printf("redis ping successful on attempt %d/%d", attempt, maxAttempts)
+			return redisClient, nil
+		}
+
+		log.Printf("redis ping failed (attempt %d/%d): %v", attempt, maxAttempts, err)
+
+		if attempt < maxAttempts {
+			// Calculate exponential backoff with jitter
+			backoff := baseDelay * time.Duration(1<<uint(attempt-1))
+			jitter := time.Duration(rand.Int63n(int64(baseDelay)))
+			wait := backoff + jitter
+
+			log.Printf("waiting %v before retry (attempt %d/%d)", wait, attempt, maxAttempts)
+			time.Sleep(wait)
+		}
+	}
+
+	return nil, fmt.Errorf("redis connection failed after %d attempts", maxAttempts)
 }
 
 func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, error) {
@@ -200,7 +229,7 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, erro
 		log.Printf("fetched %d events from page %d", len(r.Events), page)
 		all = append(all, r.Events...)
 		if !r.Pagination.HasMoreItems {
-			log.Println("no more pages available")
+			log.Printf("no more pages available (page=%d)", page)
 			break
 		}
 		page++
@@ -277,18 +306,18 @@ func publishNtfy(client *http.Client, topicURL, msg, token string) error {
 }
 
 func main() {
-	log.Println("starting lectures-notifier")
+	log.Printf("starting lectures-notifier (pid=%d)", os.Getpid())
 	isLocal := os.Getenv("NTFY_TOPIC_URL") == ""
 	if isLocal {
-		log.Println("running in local mode")
+		log.Printf("running in local mode (isLocal=%t)", isLocal)
 	} else {
-		log.Println("running in production mode")
+		log.Printf("running in production mode (isLocal=%t)", isLocal)
 		sleepDuration := time.Duration(rand.Intn(41)+10) * time.Second
 		log.Printf("sleeping for %v before proceeding", sleepDuration)
 		time.Sleep(sleepDuration)
 	}
 
-	log.Println("loading configuration from environment variables")
+	log.Printf("loading configuration from environment variables (isLocal=%t)", isLocal)
 	orgID := mustEnv("EVENTBRITE_ORGANIZER_ID")
 	token := mustEnv("EVENTBRITE_TOKEN")
 	log.Printf("loaded organizer ID: %s", orgID)
@@ -303,13 +332,13 @@ func main() {
 		if isLocalNtfy {
 			ntfyToken = strings.TrimSpace(os.Getenv("NTFY_TOKEN"))
 			if ntfyToken != "" {
-				log.Println("ntfy bearer token configured")
+				log.Printf("ntfy bearer token configured (localNtfy=%t)", isLocalNtfy)
 			} else {
-				log.Println("ntfy bearer token not set (optional for local ntfy)")
+				log.Printf("ntfy bearer token not set (optional for local ntfy, localNtfy=%t)", isLocalNtfy)
 			}
 		} else {
 			ntfyToken = mustEnv("NTFY_TOKEN")
-			log.Println("ntfy bearer token configured")
+			log.Printf("ntfy bearer token configured (localNtfy=%t)", isLocalNtfy)
 		}
 	}
 
@@ -322,12 +351,19 @@ func main() {
 	ctx := context.Background()
 	redisClient := newRedisClient(isLocal)
 
+	// Extensive retry logic for Redis connection
+	const maxRedisAttempts = 10
+	const redisBaseDelay = 2 * time.Second
+
 	var dedupeCfg dedupeConfig
 	if redisClient != nil {
-		if err := redisClient.Ping(ctx).Err(); err != nil {
-			log.Printf("redis ping failed, disabling dedupe: %v", err)
+		log.Printf("attempting to establish redis connection with extensive retries (maxAttempts=%d baseDelay=%v)", maxRedisAttempts, redisBaseDelay)
+		verifiedClient, err := retryRedisConnection(ctx, redisClient, maxRedisAttempts, redisBaseDelay)
+		if err != nil {
+			log.Printf("redis connection failed after extensive retries, disabling dedupe: %v", err)
 			redisClient = nil
 		} else {
+			redisClient = verifiedClient
 			dedupeCfg = dedupeConfig{
 				ttlCap:           envDurationHours("DEDUP_MAX_TTL_HOURS", 14*24*time.Hour),
 				reminderCooldown: envDurationHours("DEDUP_REMINDER_HOURS", 0),
@@ -396,11 +432,26 @@ func main() {
 
 	log.Printf("found %d events with available tickets (%d new)", availableCount, len(notifyEvents))
 	if len(notifyEvents) == 0 {
-		log.Println("no new events to notify, exiting")
+		log.Printf("no new events to notify, exiting (availableCount=%d)", availableCount)
 		return
 	}
 
 	for _, e := range notifyEvents {
+		if redisClient == nil {
+			log.Printf("redis unavailable, attempting reconnection before sending notification (event=%s)", e.ID)
+			tempClient := newRedisClient(isLocal)
+			if tempClient == nil {
+				log.Printf("redis still unavailable, skipping notification (event=%s)", e.ID)
+				continue
+			}
+			verifiedClient, err := retryRedisConnection(ctx, tempClient, maxRedisAttempts, redisBaseDelay)
+			if err != nil {
+				log.Printf("redis reconnection failed, skipping notification (event=%s): %v", e.ID, err)
+				continue
+			}
+			redisClient = verifiedClient
+			log.Printf("redis connection restored; continuing with notifications (event=%s)", e.ID)
+		}
 		var timeStr string
 		if len(e.Start.Local) >= len("2006-01-02T15:04:05") {
 			t, err := time.Parse("2006-01-02T15:04:05", e.Start.Local)
@@ -415,7 +466,7 @@ func main() {
 		msg := fmt.Sprintf("%s %s (%s) %s", city, e.Name.Text, timeStr, e.URL)
 
 		if isLocal {
-			log.Println("local mode: printing message to stdout")
+			log.Printf("local mode: printing message to stdout (event=%s bytes=%d)", e.ID, len(msg))
 			log.Println(msg)
 		} else {
 			// Publish to base topic
