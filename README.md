@@ -40,4 +40,4 @@ Useful overrides:
 - [x] Handle redis rate limit
 - [x] Split topics by cities
 - [x] Redis client retries
-- [ ] Add health checks
+- [x] Add health checks
