@@ -27,3 +27,14 @@ tasks:
     desc: Apply CronJobs to docker-desktop, patch to 1m, run one job, tail logs
     cmds:
       - ./scripts/k8s-docker-desktop-smoke.sh
+
+  grafana:dashboard:generate:
+    desc: Generate dashboard.json from Grafana Foundation SDK
+    cmds:
+      - go run ./cmd/grafana-dashboard
+
+  grafana:dashboard:deploy:
+    desc: Deploy dashboard.json as a ConfigMap in monitoring namespace
+    cmds:
+      - kubectl -n monitoring create configmap lectures-notifier-dashboard --from-file=dashboard.json --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n monitoring label configmap lectures-notifier-dashboard grafana_dashboard="1" --overwrite
