@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gordonpn/lectures-on-tap-scraper/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -153,7 +154,7 @@ func newRedisClient(isLocal bool) *redis.Client {
 }
 
 // retryRedisConnection attempts to establish and verify a Redis connection with extensive retries
-func retryRedisConnection(ctx context.Context, redisClient *redis.Client, maxAttempts int, baseDelay time.Duration) (*redis.Client, error) {
+func retryRedisConnection(ctx context.Context, redisClient *redis.Client, maxAttempts int, baseDelay time.Duration, m *metrics.Metrics) (*redis.Client, error) {
 	if redisClient == nil {
 		return nil, fmt.Errorf("redis client is nil")
 	}
@@ -162,10 +163,12 @@ func retryRedisConnection(ctx context.Context, redisClient *redis.Client, maxAtt
 		err := redisClient.Ping(ctx).Err()
 		if err == nil {
 			log.Printf("redis ping successful on attempt %d/%d", attempt, maxAttempts)
+			m.RecordRedisConnectionRetries(attempt)
 			return redisClient, nil
 		}
 
 		log.Printf("redis ping failed (attempt %d/%d): %v", attempt, maxAttempts, err)
+		m.RecordRedisConnectionError()
 
 		if attempt < maxAttempts {
 			// Calculate exponential backoff with jitter
@@ -181,7 +184,7 @@ func retryRedisConnection(ctx context.Context, redisClient *redis.Client, maxAtt
 	return nil, fmt.Errorf("redis connection failed after %d attempts", maxAttempts)
 }
 
-func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, error) {
+func fetchAllLiveEvents(client *http.Client, orgID, token string, m *metrics.Metrics) ([]event, error) {
 	log.Printf("starting to fetch live events from EventBrite for organizer %s", orgID)
 	var all []event
 	page := 1
@@ -203,6 +206,7 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, erro
 			resp, err = client.Do(req)
 			elapsed := time.Since(startTime)
 			log.Printf("EventBrite request attempt %d took %v", attempt, elapsed)
+			m.RecordEventBriteFetchPageDuration(elapsed)
 
 			if err == nil {
 				break
@@ -213,6 +217,7 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, erro
 				time.Sleep(waitTime)
 			} else {
 				log.Printf("error making request to EventBrite after %d attempts: %v", maxRetries, err)
+				m.RecordEventBriteFetch(0, err)
 				return nil, err
 			}
 		}
@@ -222,6 +227,7 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string) ([]event, erro
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			err := fmt.Errorf("eventbrite status %d: %s", resp.StatusCode, string(body))
 			log.Printf("error response from EventBrite: %v", err)
+			m.RecordEventBriteFetch(0, err)
 			return nil, err
 		}
 
@@ -262,7 +268,7 @@ func retryAfterDelay(header string, attempt int, base time.Duration) time.Durati
 	return backoff + jitter
 }
 
-func publishNtfy(client *http.Client, topicURL, msg, token string) error {
+func publishNtfy(client *http.Client, topicURL, msg, token string, m *metrics.Metrics) error {
 	log.Printf("publishing notification to ntfy topic (message size: %d bytes)", len(msg))
 
 	const maxAttempts = 5
@@ -274,9 +280,13 @@ func publishNtfy(client *http.Client, topicURL, msg, token string) error {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 
+		startTime := time.Now()
 		resp, err := client.Do(req)
+		elapsed := time.Since(startTime)
+
 		if err != nil {
 			log.Printf("error posting to ntfy (attempt %d/%d): %v", attempt, maxAttempts, err)
+			m.RecordNtfyPublish(elapsed, err)
 			if attempt == maxAttempts {
 				return err
 			}
@@ -291,6 +301,7 @@ func publishNtfy(client *http.Client, topicURL, msg, token string) error {
 		if resp.StatusCode == http.StatusTooManyRequests {
 			wait := retryAfterDelay(resp.Header.Get("Retry-After"), attempt, baseDelay)
 			log.Printf("ntfy rate limited (attempt %d/%d), waiting %v before retry: %s", attempt, maxAttempts, wait, string(body))
+			m.RecordNtfyPublish(elapsed, fmt.Errorf("rate limited"))
 			if attempt == maxAttempts {
 				return fmt.Errorf("ntfy rate limited after %d attempts: %s", maxAttempts, string(body))
 			}
@@ -301,9 +312,11 @@ func publishNtfy(client *http.Client, topicURL, msg, token string) error {
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			err := fmt.Errorf("ntfy status %d: %s", resp.StatusCode, string(body))
 			log.Printf("error response from ntfy: %v", err)
+			m.RecordNtfyPublish(elapsed, err)
 			return err
 		}
 
+		m.RecordNtfyPublish(elapsed, nil)
 		return nil
 	}
 
@@ -389,16 +402,18 @@ func pingHealthchecks(client *http.Client, baseURL, suffix string) {
 	}
 }
 
-func runNotifier(httpClient *http.Client, cfg appConfig, isLocal bool) error {
-	all, err := fetchAllLiveEvents(httpClient, cfg.orgID, cfg.token)
+func runNotifier(httpClient *http.Client, cfg appConfig, isLocal bool, m *metrics.Metrics) error {
+	all, err := fetchAllLiveEvents(httpClient, cfg.orgID, cfg.token, m)
 	if err != nil {
 		return fmt.Errorf("failed to fetch events: %w", err)
 	}
+	m.RecordEventsProcessed(len(all))
 
 	ctx := context.Background()
-	redisClient, dedupeCfg := initRedis(ctx, isLocal)
+	redisClient, dedupeCfg := initRedis(ctx, isLocal, m)
 	now := time.Now()
-	notifyEvents, availableCount := filterEvents(ctx, all, redisClient, dedupeCfg, now)
+	notifyEvents, availableCount := filterEvents(ctx, all, redisClient, dedupeCfg, now, m)
+	m.RecordEventsAvailable(availableCount)
 
 	log.Printf("found %d events with available tickets (%d new)", availableCount, len(notifyEvents))
 	if len(notifyEvents) == 0 {
@@ -407,7 +422,7 @@ func runNotifier(httpClient *http.Client, cfg appConfig, isLocal bool) error {
 	}
 
 	for _, e := range notifyEvents {
-		redisClient = ensureRedisForNotification(ctx, isLocal, redisClient)
+		redisClient = ensureRedisForNotification(ctx, isLocal, redisClient, m)
 		if redisClient == nil {
 			continue
 		}
@@ -417,7 +432,7 @@ func runNotifier(httpClient *http.Client, cfg appConfig, isLocal bool) error {
 			log.Println(msg)
 			continue
 		}
-		publishEventNotifications(httpClient, cfg, e, msg)
+		publishEventNotifications(httpClient, cfg, e, msg, m)
 	}
 
 	return nil
@@ -440,14 +455,14 @@ func buildDedupeConfig() dedupeConfig {
 	return dedupeCfg
 }
 
-func initRedis(ctx context.Context, isLocal bool) (*redis.Client, dedupeConfig) {
+func initRedis(ctx context.Context, isLocal bool, m *metrics.Metrics) (*redis.Client, dedupeConfig) {
 	redisClient := newRedisClient(isLocal)
 	if redisClient == nil {
 		return nil, dedupeConfig{}
 	}
 
 	log.Printf("attempting to establish redis connection with extensive retries (maxAttempts=%d baseDelay=%v)", maxRedisAttempts, redisBaseDelay)
-	verifiedClient, err := retryRedisConnection(ctx, redisClient, maxRedisAttempts, redisBaseDelay)
+	verifiedClient, err := retryRedisConnection(ctx, redisClient, maxRedisAttempts, redisBaseDelay, m)
 	if err != nil {
 		log.Printf("redis connection failed after extensive retries, disabling dedupe: %v", err)
 		return nil, dedupeConfig{}
@@ -459,7 +474,7 @@ func initRedis(ctx context.Context, isLocal bool) (*redis.Client, dedupeConfig) 
 	return verifiedClient, dedupeCfg
 }
 
-func filterEvents(ctx context.Context, events []event, redisClient *redis.Client, dedupeCfg dedupeConfig, now time.Time) ([]event, int) {
+func filterEvents(ctx context.Context, events []event, redisClient *redis.Client, dedupeCfg dedupeConfig, now time.Time, m *metrics.Metrics) ([]event, int) {
 	var notifyEvents []event
 	availableCount := 0
 
@@ -471,10 +486,12 @@ func filterEvents(ctx context.Context, events []event, redisClient *redis.Client
 
 		available := isTicketsAvailable(e)
 		if !available {
+			m.RecordEventSoldOut()
 			if redisClient != nil && dedupeCfg.deleteOnSoldOut {
 				deleted, err := redisClient.Del(ctx, redisKey).Result()
 				if err != nil {
 					log.Printf("redis delete failed for %s (event %s): %v", redisKey, e.ID, err)
+					m.RecordRedisOperationError()
 				} else if deleted > 0 {
 					log.Printf("redis deleted key %s for sold-out event %s (%s)", redisKey, e.ID, e.Name.Text)
 				}
@@ -484,6 +501,9 @@ func filterEvents(ctx context.Context, events []event, redisClient *redis.Client
 
 		availableCount++
 		startTime, hasStart := parseEventStart(e)
+		if !hasStart {
+			m.RecordEventWithoutStartTime()
+		}
 		if hasStart && startTime.Before(now) {
 			continue
 		}
@@ -494,11 +514,13 @@ func filterEvents(ctx context.Context, events []event, redisClient *redis.Client
 			set, err := redisClient.SetNX(ctx, redisKey, "1", ttl).Result()
 			if err != nil {
 				log.Printf("redis setnx failed for %s (event %s): %v (proceeding to notify)", redisKey, e.ID, err)
+				m.RecordRedisOperationError()
 			} else if set {
 				log.Printf("redis set key %s with TTL %v for event %s (%s)", redisKey, ttl, e.ID, e.Name.Text)
 			} else {
 				log.Printf("redis dedupe skip: key %s already exists for event %s (%s)", redisKey, e.ID, e.Name.Text)
 				shouldNotify = false
+				m.RecordEventDeduplicated()
 			}
 		}
 
@@ -510,7 +532,7 @@ func filterEvents(ctx context.Context, events []event, redisClient *redis.Client
 	return notifyEvents, availableCount
 }
 
-func ensureRedisForNotification(ctx context.Context, isLocal bool, redisClient *redis.Client) *redis.Client {
+func ensureRedisForNotification(ctx context.Context, isLocal bool, redisClient *redis.Client, m *metrics.Metrics) *redis.Client {
 	if redisClient != nil {
 		return redisClient
 	}
@@ -518,9 +540,10 @@ func ensureRedisForNotification(ctx context.Context, isLocal bool, redisClient *
 	tempClient := newRedisClient(isLocal)
 	if tempClient == nil {
 		log.Printf("redis still unavailable, skipping notification")
+		m.RecordRedisConnectionError()
 		return nil
 	}
-	verifiedClient, err := retryRedisConnection(ctx, tempClient, maxRedisAttempts, redisBaseDelay)
+	verifiedClient, err := retryRedisConnection(ctx, tempClient, maxRedisAttempts, redisBaseDelay, m)
 	if err != nil {
 		log.Printf("redis reconnection failed, skipping notification: %v", err)
 		return nil
@@ -555,11 +578,12 @@ func stateTopicSlug(state string) string {
 	return b.String()
 }
 
-func publishEventNotifications(client *http.Client, cfg appConfig, e event, msg string) {
-	if err := publishNtfy(client, cfg.ntfyTopicURL, msg, cfg.ntfyToken); err != nil {
+func publishEventNotifications(client *http.Client, cfg appConfig, e event, msg string, m *metrics.Metrics) {
+	if err := publishNtfy(client, cfg.ntfyTopicURL, msg, cfg.ntfyToken, m); err != nil {
 		log.Printf("failed to publish notification for event %s: %v", e.ID, err)
 		return
 	}
+	m.RecordEventNotified()
 	log.Printf("ntfy publish ok | topic=%s | bytes=%d | msg=%s", cfg.ntfyTopicURL, len(msg), msg)
 
 	state := ""
@@ -576,7 +600,7 @@ func publishEventNotifications(client *http.Client, cfg appConfig, e event, msg 
 
 	base := strings.TrimSuffix(cfg.ntfyTopicURL, "-")
 	stateTopicURL := fmt.Sprintf("%s-%s", base, stateSlug)
-	if err := publishNtfy(client, stateTopicURL, msg, cfg.ntfyToken); err != nil {
+	if err := publishNtfy(client, stateTopicURL, msg, cfg.ntfyToken, m); err != nil {
 		log.Printf("failed to publish state-specific notification for event %s (state=%s): %v", e.ID, strings.ToLower(strings.TrimSpace(state)), err)
 		return
 	}
@@ -589,11 +613,19 @@ func main() {
 	logModeAndSleep(isLocal)
 	cfg := loadConfig(isLocal)
 	httpClient := &http.Client{Timeout: 45 * time.Second}
+	metricsClient := metrics.InitializeMetricsFromEnv(isLocal)
+	ctx := context.Background()
+	startTime := time.Now()
+	metricsClient.RecordExecutionStart(ctx)
 
 	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "start")
-	if err := runNotifier(httpClient, cfg, isLocal); err != nil {
+	if err := runNotifier(httpClient, cfg, isLocal, metricsClient); err != nil {
 		pingHealthchecks(httpClient, cfg.healthchecksPingURL, "fail")
+		metricsClient.RecordExecutionFailure(ctx, time.Since(startTime), err.Error())
+		_ = metricsClient.Push(ctx)
 		log.Fatalf("notifier run failed: %v", err)
 	}
+	metricsClient.RecordExecutionSuccess(ctx, time.Since(startTime))
+	_ = metricsClient.Push(ctx)
 	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "")
 }

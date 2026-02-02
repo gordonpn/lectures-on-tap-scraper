@@ -1,5 +1,15 @@
 # Lectures on Tap scraper and notifier
 
+![healthchecks.io](https://healthchecks.io/badge/63a82bd5-b473-430b-9745-22843eff864e/ckgqM2Fm-2.svg)
+
+Subscription links:
+
+- https://ntfy.gordon-pn.com/lectures-on-tap
+- https://ntfy.gordon-pn.com/lectures-on-tap-ca
+- https://ntfy.gordon-pn.com/lectures-on-tap-il
+- https://ntfy.gordon-pn.com/lectures-on-tap-ma
+- https://ntfy.gordon-pn.com/lectures-on-tap-ny
+
 ## Local CronJob smoke test on Docker Desktop
 
 Docker Desktop ships an upstream Kubernetes cluster that works fine for CronJob testing. With `kubectl` installed and Docker Desktop Kubernetes enabled:
@@ -41,3 +51,4 @@ Useful overrides:
 - [x] Split topics by cities
 - [x] Redis client retries
 - [x] Add health checks
+- [x] Add metrics
