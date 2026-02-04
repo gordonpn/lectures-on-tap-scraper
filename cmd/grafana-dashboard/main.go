@@ -25,22 +25,22 @@ func main() {
 			Title("Execution rate").
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`rate(lectures_notifier_execution_success_total[5m])`).
+					Expr(`sum(rate(lectures_notifier_execution_success_total[5m]))`).
 					LegendFormat("success"),
 			).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`rate(lectures_notifier_execution_failure_total[5m])`).
+					Expr(`sum(rate(lectures_notifier_execution_failure_total[5m]))`).
 					LegendFormat("failure"),
 			),
 	)
 	builder = builder.WithPanel(
 		timeseries.NewPanelBuilder().
-			Title("Execution duration p95").
+			Title("Execution duration avg").
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`histogram_quantile(0.95, sum(rate(lectures_notifier_execution_duration_seconds_bucket[5m])) by (le))`).
-					LegendFormat("p95"),
+					Expr(`sum(rate(lectures_notifier_execution_duration_seconds_sum[5m])) / sum(rate(lectures_notifier_execution_duration_seconds_count[5m]))`).
+					LegendFormat("avg"),
 			),
 	)
 
@@ -50,17 +50,17 @@ func main() {
 			Title("Events processed").
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`rate(lectures_notifier_events_processed_total[5m])`).
+					Expr(`sum(rate(lectures_notifier_events_processed_total[5m]))`).
 					LegendFormat("processed"),
 			).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`rate(lectures_notifier_events_available_total[5m])`).
+					Expr(`sum(rate(lectures_notifier_events_available_total[5m]))`).
 					LegendFormat("available"),
 			).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`rate(lectures_notifier_events_notified_total[5m])`).
+					Expr(`sum(rate(lectures_notifier_events_notified_total[5m]))`).
 					LegendFormat("notified"),
 			),
 	)
@@ -69,17 +69,17 @@ func main() {
 			Title("Events deduplicated / sold out / missing start time").
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`rate(lectures_notifier_events_deduplicated_total[5m])`).
+					Expr(`sum(rate(lectures_notifier_events_deduplicated_total[5m]))`).
 					LegendFormat("deduplicated"),
 			).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`rate(lectures_notifier_events_sold_out_total[5m])`).
+					Expr(`sum(rate(lectures_notifier_events_sold_out_total[5m]))`).
 					LegendFormat("sold_out"),
 			).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`rate(lectures_notifier_events_without_start_time_total[5m])`).
+					Expr(`sum(rate(lectures_notifier_events_without_start_time_total[5m]))`).
 					LegendFormat("missing_start_time"),
 			),
 	)
@@ -87,20 +87,20 @@ func main() {
 	builder = builder.WithRow(dashboard.NewRowBuilder("Integrations"))
 	builder = builder.WithPanel(
 		timeseries.NewPanelBuilder().
-			Title("Eventbrite fetch duration p95").
+			Title("Eventbrite fetch duration avg").
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`histogram_quantile(0.95, sum(rate(lectures_notifier_eventbrite_fetch_duration_seconds_bucket[5m])) by (le))`).
-					LegendFormat("p95"),
+					Expr(`sum(rate(lectures_notifier_eventbrite_fetch_duration_seconds_sum[5m])) / sum(rate(lectures_notifier_eventbrite_fetch_duration_seconds_count[5m]))`).
+					LegendFormat("avg"),
 			),
 	)
 	builder = builder.WithPanel(
 		timeseries.NewPanelBuilder().
-			Title("Ntfy publish duration p95").
+			Title("Ntfy publish duration avg").
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`histogram_quantile(0.95, sum(rate(lectures_notifier_ntfy_publish_duration_seconds_bucket[5m])) by (le))`).
-					LegendFormat("p95"),
+					Expr(`sum(rate(lectures_notifier_ntfy_publish_duration_seconds_sum[5m])) / sum(rate(lectures_notifier_ntfy_publish_duration_seconds_count[5m]))`).
+					LegendFormat("avg"),
 			),
 	)
 	builder = builder.WithPanel(
@@ -108,7 +108,7 @@ func main() {
 			Title("Errors").
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`rate(lectures_notifier_errors_total[5m])`).
+					Expr(`sum(rate(lectures_notifier_errors_total[5m]))`).
 					LegendFormat("errors"),
 			),
 	)
