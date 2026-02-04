@@ -9,6 +9,7 @@ import (
 	"github.com/grafana/grafana-foundation-sdk/go/dashboard"
 	"github.com/grafana/grafana-foundation-sdk/go/prometheus"
 	"github.com/grafana/grafana-foundation-sdk/go/stat"
+	"github.com/grafana/grafana-foundation-sdk/go/timeseries"
 )
 
 func main() {
@@ -24,22 +25,20 @@ func main() {
 	builder = builder.WithRow(dashboard.NewRowBuilder("Last 5 minutes"))
 
 	builder = builder.WithPanel(
-		stat.NewPanelBuilder().
-			Title("Executions (5m)").
-			Span(6).
+		timeseries.NewPanelBuilder().
+			Title("Executions per 5m").
+			Span(12).
 			Interval("5m").
-			ReduceOptions(statReduce).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
 					Expr(`sum(increase(lectures_notifier_execution_success_total[5m])) + sum(increase(lectures_notifier_execution_failure_total[5m]))`).
 					LegendFormat("executions"),
 			),
-		)
-
+	)
 	builder = builder.WithPanel(
 		stat.NewPanelBuilder().
 			Title("Failures (5m)").
-			Span(6).
+			Span(4).
 			Interval("5m").
 			ReduceOptions(statReduce).
 			WithTarget(
@@ -47,12 +46,11 @@ func main() {
 					Expr(`sum(increase(lectures_notifier_execution_failure_total[5m]))`).
 					LegendFormat("failures"),
 			),
-		)
-
+	)
 	builder = builder.WithPanel(
 		stat.NewPanelBuilder().
 			Title("Notifications sent (5m)").
-			Span(6).
+			Span(4).
 			Interval("5m").
 			ReduceOptions(statReduce).
 			WithTarget(
@@ -60,12 +58,11 @@ func main() {
 					Expr(`sum(increase(lectures_notifier_events_notified_total[5m]))`).
 					LegendFormat("notified"),
 			),
-		)
-
+	)
 	builder = builder.WithPanel(
 		stat.NewPanelBuilder().
 			Title("Execution duration p95 (5m)").
-			Span(6).
+			Span(4).
 			Interval("5m").
 			Unit("s").
 			ReduceOptions(statReduce).
@@ -74,8 +71,7 @@ func main() {
 					Expr(`histogram_quantile(0.95, sum(rate(lectures_notifier_execution_duration_seconds_bucket[5m])) by (le))`).
 					LegendFormat("p95"),
 			),
-		)
-
+	)
 	dashboardJSON, err := builder.Build()
 	if err != nil {
 		panic(err)
