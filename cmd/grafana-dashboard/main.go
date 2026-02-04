@@ -8,110 +8,73 @@ import (
 	"github.com/grafana/grafana-foundation-sdk/go/common"
 	"github.com/grafana/grafana-foundation-sdk/go/dashboard"
 	"github.com/grafana/grafana-foundation-sdk/go/prometheus"
-	"github.com/grafana/grafana-foundation-sdk/go/timeseries"
+	"github.com/grafana/grafana-foundation-sdk/go/stat"
 )
 
 func main() {
 	builder := dashboard.NewDashboardBuilder("Lectures Notifier").
 		Uid("lectures-notifier").
 		Tags([]string{"lectures", "notifier", "prometheus"}).
-		Refresh("1m").
+		Refresh("30s").
 		Time("now-6h", "now").
 		Timezone(common.TimeZoneBrowser)
 
-	builder = builder.WithRow(dashboard.NewRowBuilder("Executions"))
-	builder = builder.WithPanel(
-		timeseries.NewPanelBuilder().
-			Title("Execution rate").
-			WithTarget(
-				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_execution_success_total[5m]))`).
-					LegendFormat("success"),
-			).
-			WithTarget(
-				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_execution_failure_total[5m]))`).
-					LegendFormat("failure"),
-			),
-	)
-	builder = builder.WithPanel(
-		timeseries.NewPanelBuilder().
-			Title("Execution duration avg").
-			WithTarget(
-				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_execution_duration_seconds_sum[5m])) / sum(rate(lectures_notifier_execution_duration_seconds_count[5m]))`).
-					LegendFormat("avg"),
-			),
-	)
+	statReduce := common.NewReduceDataOptionsBuilder().Calcs([]string{"lastNotNull"})
 
-	builder = builder.WithRow(dashboard.NewRowBuilder("Events"))
+	builder = builder.WithRow(dashboard.NewRowBuilder("Last 5 minutes"))
+
 	builder = builder.WithPanel(
-		timeseries.NewPanelBuilder().
-			Title("Events processed").
+		stat.NewPanelBuilder().
+			Title("Executions (5m)").
+			Span(6).
+			Interval("5m").
+			ReduceOptions(statReduce).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_events_processed_total[5m]))`).
-					LegendFormat("processed"),
-			).
+					Expr(`sum(increase(lectures_notifier_execution_success_total[5m])) + sum(increase(lectures_notifier_execution_failure_total[5m]))`).
+					LegendFormat("executions"),
+			),
+		)
+
+	builder = builder.WithPanel(
+		stat.NewPanelBuilder().
+			Title("Failures (5m)").
+			Span(6).
+			Interval("5m").
+			ReduceOptions(statReduce).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_events_available_total[5m]))`).
-					LegendFormat("available"),
-			).
+					Expr(`sum(increase(lectures_notifier_execution_failure_total[5m]))`).
+					LegendFormat("failures"),
+			),
+		)
+
+	builder = builder.WithPanel(
+		stat.NewPanelBuilder().
+			Title("Notifications sent (5m)").
+			Span(6).
+			Interval("5m").
+			ReduceOptions(statReduce).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_events_notified_total[5m]))`).
+					Expr(`sum(increase(lectures_notifier_events_notified_total[5m]))`).
 					LegendFormat("notified"),
 			),
-	)
-	builder = builder.WithPanel(
-		timeseries.NewPanelBuilder().
-			Title("Events deduplicated / sold out / missing start time").
-			WithTarget(
-				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_events_deduplicated_total[5m]))`).
-					LegendFormat("deduplicated"),
-			).
-			WithTarget(
-				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_events_sold_out_total[5m]))`).
-					LegendFormat("sold_out"),
-			).
-			WithTarget(
-				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_events_without_start_time_total[5m]))`).
-					LegendFormat("missing_start_time"),
-			),
-	)
+		)
 
-	builder = builder.WithRow(dashboard.NewRowBuilder("Integrations"))
 	builder = builder.WithPanel(
-		timeseries.NewPanelBuilder().
-			Title("Eventbrite fetch duration avg").
+		stat.NewPanelBuilder().
+			Title("Execution duration p95 (5m)").
+			Span(6).
+			Interval("5m").
+			Unit("s").
+			ReduceOptions(statReduce).
 			WithTarget(
 				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_eventbrite_fetch_duration_seconds_sum[5m])) / sum(rate(lectures_notifier_eventbrite_fetch_duration_seconds_count[5m]))`).
-					LegendFormat("avg"),
+					Expr(`histogram_quantile(0.95, sum(rate(lectures_notifier_execution_duration_seconds_bucket[5m])) by (le))`).
+					LegendFormat("p95"),
 			),
-	)
-	builder = builder.WithPanel(
-		timeseries.NewPanelBuilder().
-			Title("Ntfy publish duration avg").
-			WithTarget(
-				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_ntfy_publish_duration_seconds_sum[5m])) / sum(rate(lectures_notifier_ntfy_publish_duration_seconds_count[5m]))`).
-					LegendFormat("avg"),
-			),
-	)
-	builder = builder.WithPanel(
-		timeseries.NewPanelBuilder().
-			Title("Errors").
-			WithTarget(
-				prometheus.NewDataqueryBuilder().
-					Expr(`sum(rate(lectures_notifier_errors_total[5m]))`).
-					LegendFormat("errors"),
-			),
-	)
+		)
 
 	dashboardJSON, err := builder.Build()
 	if err != nil {
@@ -133,4 +96,5 @@ func main() {
 	}
 
 	fmt.Printf("dashboard written to %s\n", outputPath)
+
 }
