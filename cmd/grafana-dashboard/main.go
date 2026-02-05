@@ -92,5 +92,4 @@ func main() {
 	}
 
 	fmt.Printf("dashboard written to %s\n", outputPath)
-
 }

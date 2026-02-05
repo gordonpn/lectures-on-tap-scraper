@@ -279,6 +279,7 @@ func publishNtfy(client *http.Client, topicURL, msg, token string, m *metrics.Me
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
+		req.Header.Set("Priority", "max")
 
 		startTime := time.Now()
 		resp, err := client.Do(req)
