@@ -5,7 +5,7 @@ go 1.25.5
 require (
 	github.com/grafana/grafana-foundation-sdk/go v0.0.0-20260129154400-b30d142ba78f
 	github.com/prometheus/client_golang v1.23.2
-	github.com/redis/go-redis/v9 v9.5.1
+	github.com/redis/go-redis/v9 v9.5.5
 )
 
 require (
