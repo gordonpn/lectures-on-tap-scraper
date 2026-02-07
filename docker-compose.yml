@@ -68,6 +68,25 @@ services:
       - /app/_build
       - /app/deps
 
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    environment:
+      # Used by Vite proxy to reach the backend container
+      API_URL: http://backend:4000
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5173/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
   lectures-notifier:
     build:
       context: ./scraper
