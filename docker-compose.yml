@@ -34,9 +34,43 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: lectures_on_tap_dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lectures_on_tap_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ecto://postgres:postgrespassword@db/lectures_on_tap_dev
+      SECRET_KEY_BASE: "REPLACE_WITH_A_LONG_SECRET_STRING_IN_PROD_BUT_OK_FOR_DEV"
+      PHX_HOST: localhost
+    volumes:
+      - ./backend:/app
+      - /app/_build
+      - /app/deps
+
   lectures-notifier:
     build:
-      context: .
+      context: ./scraper
       dockerfile: Dockerfile
     container_name: lectures-notifier
     depends_on:
@@ -44,8 +78,9 @@ services:
         condition: service_healthy
       ntfy:
         condition: service_healthy
-    env_file: .env
+    env_file: ./.env
     environment:
+      PROMETHEUS_PUSHGATEWAY_URL: ""
       NTFY_TOPIC_URL: http://ntfy:80/lectures-on-tap
       REDIS_ADDR: redis:6379
     restart: on-failure
@@ -56,3 +91,4 @@ volumes:
   redis-data:
   ntfy-data:
   ntfy-etc:
+  postgres-data:
