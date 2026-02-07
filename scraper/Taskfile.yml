@@ -33,6 +33,11 @@ tasks:
     cmds:
       - go run ./cmd/grafana-dashboard
 
+  grafana:dashboard:generate:docker:
+    desc: Generate dashboard.json in a Go container
+    cmds:
+      - docker run --rm -v "$PWD:/work" -w /work golang:1.25 go run ./cmd/grafana-dashboard
+
   grafana:dashboard:deploy:
     desc: Deploy dashboard.json as a ConfigMap in monitoring namespace
     cmds:
