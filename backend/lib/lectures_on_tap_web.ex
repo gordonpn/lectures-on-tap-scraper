@@ -17,7 +17,9 @@ defmodule LecturesOnTapWeb do
   those modules here.
   """
 
-  def static_paths, do: ~w(assets fonts images favicon.ico robots.txt)
+  def static_paths,
+    do:
+      ~w(_app assets fonts images icons favicon.ico robots.txt manifest.webmanifest service-worker.js apple-touch-icon.svg index.html)
 
   def router do
     quote do

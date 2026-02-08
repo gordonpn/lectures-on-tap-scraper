@@ -1,12 +1,15 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
+import { resolve } from 'node:path';
 import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ mode }) => {
-	const env = loadEnv(mode, process.cwd(), '');
+	const envDir = resolve(process.cwd(), '..');
+	const env = loadEnv(mode, envDir, '');
 	const apiUrl = env.API_URL ?? 'http://localhost:4000';
 
 	return {
+		envDir,
 		plugins: [
 			sveltekit(),
 			tailwindcss() as any],

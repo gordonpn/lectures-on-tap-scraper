@@ -7,9 +7,16 @@ defmodule LecturesOnTap.Application do
 
   @impl true
   def start(_type, _args) do
+    notifications_config = Application.get_env(:lectures_on_tap, LecturesOnTap.Notifications, [])
+    max_concurrency = Keyword.get(notifications_config, :max_concurrency, 10)
+
     children = [
       LecturesOnTapWeb.Telemetry,
       LecturesOnTap.Repo,
+      LecturesOnTap.RateLimiter,
+      LecturesOnTap.Redis,
+      {Task.Supervisor,
+       name: LecturesOnTap.Notifications.TaskSupervisor, max_children: max_concurrency * 2},
       {DNSCluster, query: Application.get_env(:lectures_on_tap, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: LecturesOnTap.PubSub},
       # Start a worker by calling: LecturesOnTap.Worker.start_link(arg)

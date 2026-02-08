@@ -1,7 +1,6 @@
 services:
   redis:
     image: redis:7-alpine
-    container_name: lectures-redis
     ports:
       - "6379:6379"
     volumes:
@@ -16,7 +15,6 @@ services:
 
   ntfy:
     image: binwiederhier/ntfy:latest
-    container_name: lectures-ntfy
     command: serve
     ports:
       - "8080:80"
@@ -59,10 +57,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: ./.env
     environment:
       DATABASE_URL: ecto://postgres:postgrespassword@db/lectures_on_tap_dev
       SECRET_KEY_BASE: "REPLACE_WITH_A_LONG_SECRET_STRING_IN_PROD_BUT_OK_FOR_DEV"
       PHX_HOST: localhost
+      HUB_PUBLIC_ORIGIN: http://localhost:4000
+      REDIS_URL: redis://redis:6379
     volumes:
       - ./backend:/app
       - /app/_build
@@ -74,7 +77,9 @@ services:
       - "5173:5173"
     depends_on:
       - backend
+    command: sh -c "corepack enable && pnpm install && pnpm run dev -- --host"
     environment:
+      CI: "true"
       # Used by Vite proxy to reach the backend container
       API_URL: http://backend:4000
     healthcheck:
@@ -87,11 +92,10 @@ services:
       - ./frontend:/app
       - /app/node_modules
 
-  lectures-notifier:
+  notifier:
     build:
       context: ./scraper
       dockerfile: Dockerfile
-    container_name: lectures-notifier
     depends_on:
       redis:
         condition: service_healthy

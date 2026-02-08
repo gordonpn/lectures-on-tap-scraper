@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="Notification Hub">
+  <rect width="180" height="180" rx="34" fill="#f97316"/>
+  <circle cx="90" cy="72" r="38" fill="#fff7ed"/>
+  <path d="M50 124h80" stroke="#fff7ed" stroke-width="12" stroke-linecap="round"/>
+</svg>

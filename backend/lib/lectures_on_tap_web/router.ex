@@ -2,11 +2,43 @@ defmodule LecturesOnTapWeb.Router do
   use LecturesOnTapWeb, :router
 
   pipeline :api do
-    plug :accepts, ["json"]
+    plug(:accepts, ["json"])
+  end
+
+  pipeline :browser do
+    plug(:accepts, ["html"])
+  end
+
+  pipeline :hub_secret do
+    plug(LecturesOnTapWeb.Plugs.SharedSecret)
   end
 
   scope "/api", LecturesOnTapWeb do
-    pipe_through :api
+    pipe_through(:api)
+
+    post("/subscribe", SubscriptionController, :subscribe)
+    post("/unsubscribe", SubscriptionController, :unsubscribe)
+    get("/subscriptions/me", SubscriptionController, :me)
+    get("/latest-scrape", ScrapeController, :latest)
+    post("/trigger-self", TriggerController, :trigger_self)
+  end
+
+  scope "/api", LecturesOnTapWeb do
+    pipe_through([:api, :hub_secret])
+
+    post("/trigger", TriggerController, :trigger)
+  end
+
+  scope "/", LecturesOnTapWeb do
+    pipe_through(:api)
+
+    get("/healthz", HealthController, :index)
+  end
+
+  scope "/", LecturesOnTapWeb do
+    pipe_through(:browser)
+
+    get("/*path", SpaController, :index)
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
@@ -19,10 +51,10 @@ defmodule LecturesOnTapWeb.Router do
     import Phoenix.LiveDashboard.Router
 
     scope "/dev" do
-      pipe_through [:fetch_session, :protect_from_forgery]
+      pipe_through([:fetch_session, :protect_from_forgery])
 
-      live_dashboard "/dashboard", metrics: LecturesOnTapWeb.Telemetry
-      forward "/mailbox", Plug.Swoosh.MailboxPreview
+      live_dashboard("/dashboard", metrics: LecturesOnTapWeb.Telemetry)
+      forward("/mailbox", Plug.Swoosh.MailboxPreview)
     end
   end
 end

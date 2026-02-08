@@ -1,0 +1,84 @@
+version: '3'
+
+vars:
+  BACKEND_DIR: backend
+  FRONTEND_DIR: frontend
+
+includes:
+  scraper:
+    taskfile: ./scraper/Taskfile.yml
+    dir: ./scraper
+
+tasks:
+  docker:up:
+    desc: Start postgres + redis + phoenix
+    cmds:
+      - docker compose -f docker-compose.yml up -d
+
+  docker:down:
+    desc: Stop local compose services
+    cmds:
+      - docker compose -f docker-compose.yml down
+
+  dev:backend:
+    desc: Run Phoenix API locally
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - mix deps.get
+      - mix ecto.setup
+      - mix phx.server
+
+  dev:frontend:
+    desc: Run SvelteKit dev server
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - corepack enable
+      - pnpm install
+      - pnpm run dev -- --host
+
+  build:frontend:
+    desc: Build SvelteKit SPA into Phoenix priv/static
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - corepack enable
+      - pnpm install
+      - pnpm run build
+
+  build:backend:
+    desc: Digest Phoenix static assets
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - mix deps.get
+      - mix phx.digest
+
+  build:
+    desc: Build frontend then digest backend assets
+    cmds:
+      - task: build:frontend
+      - task: build:backend
+
+  format:backend:
+    desc: Format Elixir files
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - mix format
+
+  format:frontend:
+    desc: Format frontend files
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - corepack enable
+      - pnpm install
+      - pnpm run format
+
+  format:
+    desc: Format Elixir + frontend files
+    cmds:
+      - task: format:backend
+      - task: format:frontend
+
+  db:migrate:
+    desc: Run database migrations
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - mix ecto.migrate

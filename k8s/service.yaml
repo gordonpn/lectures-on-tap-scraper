@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-hub
+spec:
+  selector:
+    app: notification-hub
+  ports:
+    - name: http
+      port: 80
+      targetPort: 4000
+  type: ClusterIP

@@ -23,6 +23,18 @@ end
 config :lectures_on_tap, LecturesOnTapWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+config :lectures_on_tap, :hub_ui_code, System.get_env("HUB_UI_CODE")
+config :lectures_on_tap, :hub_secret, System.get_env("HUB_SECRET")
+config :lectures_on_tap, :hub_public_origin, System.get_env("HUB_PUBLIC_ORIGIN")
+
+redis_url = System.get_env("REDIS_URL") || System.get_env("REDIS_ADDR")
+config :lectures_on_tap, :redis_url, redis_url
+
+config :lectures_on_tap, LecturesOnTap.Notifications,
+  vapid_public_key: System.get_env("VAPID_PUBLIC_KEY"),
+  vapid_private_key: System.get_env("VAPID_PRIVATE_KEY"),
+  vapid_subject: System.get_env("VAPID_SUBJECT") || System.get_env("HUB_PUBLIC_ORIGIN")
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

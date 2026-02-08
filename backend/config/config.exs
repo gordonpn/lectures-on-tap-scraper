@@ -11,6 +11,16 @@ config :lectures_on_tap,
   ecto_repos: [LecturesOnTap.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+config :lectures_on_tap, LecturesOnTap.Notifications,
+  max_concurrency: 10,
+  max_retries: 3,
+  retry_base_backoff_ms: 400,
+  ttl_seconds: 60 * 60 * 24 * 14
+
+config :lectures_on_tap, :hub_limits,
+  subscribe_rate_limit: 5,
+  subscribe_rate_window_ms: 60_000
+
 # Configure the endpoint
 config :lectures_on_tap, LecturesOnTapWeb.Endpoint,
   url: [host: "localhost"],

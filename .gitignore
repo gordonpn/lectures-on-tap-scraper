@@ -22,3 +22,5 @@ repomix-output.xml
 .aider*
 /scraper/lectures-notifier
 scraper/lectures-notifier
+.pnpm-store
+backend/priv/static/
