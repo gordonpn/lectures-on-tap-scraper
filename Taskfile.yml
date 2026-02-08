@@ -36,6 +36,11 @@ tasks:
       - pnpm install
       - pnpm run dev -- --host
 
+  ngrok:
+    desc: Expose Phoenix locally via ngrok
+    cmds:
+      - ngrok http 4000
+
   build:frontend:
     desc: Build SvelteKit SPA into Phoenix priv/static
     dir: '{{.FRONTEND_DIR}}'

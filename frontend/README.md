@@ -37,6 +37,10 @@ To create a production version of your app:
 npm run build
 ```
 
+For production builds, Vite injects `VITE_*` variables at build time. If you want the debug UI,
+set `VITE_DOCKER_COMPOSE=true` in your environment (or a `.env.production` file) before
+running the build.
+
 You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

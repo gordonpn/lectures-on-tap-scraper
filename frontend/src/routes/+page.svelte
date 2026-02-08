@@ -258,6 +258,7 @@
 		<h1>Lectures on Tap Notifications</h1>
 		<p>Web app to subscribe to Lectures on Tap ticket updates via push notifications.</p>
 
+
 		{#if !installed}
 			<p class="status">
 				<span class="pill">Install required</span>
@@ -341,7 +342,7 @@
 
 		<div class="card">
 			<div class="label">Available tickets</div>
-			<p class="status">Coming soon.</p>
+			<p class="status">Feature coming soon.</p>
 		</div>
 	</section>
 </div>

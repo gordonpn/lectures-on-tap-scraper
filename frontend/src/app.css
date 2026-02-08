@@ -10,6 +10,8 @@
 	--card: #ffffff;
 	--border: #e7e0d7;
 	--shadow: 0 18px 45px rgba(27, 27, 31, 0.12);
+	--safe-top: env(safe-area-inset-top, 0px);
+	--safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 * {
@@ -19,6 +21,7 @@
 body {
 	margin: 0;
 	min-height: 100vh;
+	min-height: 100dvh;
 	font-family: "Space Grotesk", system-ui, -apple-system, sans-serif;
 	color: var(--ink);
 	background:
@@ -33,7 +36,7 @@ a {
 .app {
 	max-width: 960px;
 	margin: 0 auto;
-	padding: 2.5rem 1.5rem 4rem;
+	padding: calc(2.5rem + var(--safe-top)) 1.5rem calc(4rem + var(--safe-bottom));
 }
 
 .hero {
