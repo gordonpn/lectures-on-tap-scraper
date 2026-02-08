@@ -19,7 +19,6 @@ defmodule LecturesOnTapWeb.Router do
     post("/subscribe", SubscriptionController, :subscribe)
     post("/unsubscribe", SubscriptionController, :unsubscribe)
     get("/subscriptions/me", SubscriptionController, :me)
-    get("/latest-scrape", ScrapeController, :latest)
     post("/trigger-self", TriggerController, :trigger_self)
   end
 

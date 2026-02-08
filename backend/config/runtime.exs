@@ -23,6 +23,15 @@ end
 config :lectures_on_tap, LecturesOnTapWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+logger_level =
+  case System.get_env("DOCKER_COMPOSE") do
+    "true" -> :debug
+    "1" -> :debug
+    _ -> :info
+  end
+
+config :logger, level: logger_level
+
 config :lectures_on_tap, :hub_ui_code, System.get_env("HUB_UI_CODE")
 config :lectures_on_tap, :hub_secret, System.get_env("HUB_SECRET")
 config :lectures_on_tap, :hub_public_origin, System.get_env("HUB_PUBLIC_ORIGIN")
