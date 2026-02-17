@@ -31,7 +31,7 @@ func (n *NtfyNotifier) Name() string {
 }
 
 func (n *NtfyNotifier) Notify(ctx context.Context, note Notification) error {
-	if err := n.publish(ctx, n.topicURL, note.Body); err != nil {
+	if err := n.publish(ctx, n.topicURL, note.Body, note.URL); err != nil {
 		return err
 	}
 
@@ -45,13 +45,13 @@ func (n *NtfyNotifier) Notify(ctx context.Context, note Notification) error {
 
 	base := strings.TrimSuffix(n.topicURL, "-")
 	stateTopicURL := fmt.Sprintf("%s-%s", base, stateSlug)
-	if err := n.publish(ctx, stateTopicURL, note.Body); err != nil {
+	if err := n.publish(ctx, stateTopicURL, note.Body, note.URL); err != nil {
 		return fmt.Errorf("state-specific publish failed for state=%s: %w", strings.ToLower(strings.TrimSpace(note.State)), err)
 	}
 	return nil
 }
 
-func (n *NtfyNotifier) publish(ctx context.Context, topicURL, msg string) error {
+func (n *NtfyNotifier) publish(ctx context.Context, topicURL, msg, clickURL string) error {
 	log.Printf("publishing notification to ntfy topic=%s (message size: %d bytes)", topicURL, len(msg))
 
 	const maxAttempts = 5
@@ -63,6 +63,10 @@ func (n *NtfyNotifier) publish(ctx context.Context, topicURL, msg string) error 
 			req.Header.Set("Authorization", "Bearer "+n.token)
 		}
 		req.Header.Set("Priority", "max")
+		if strings.TrimSpace(clickURL) != "" {
+			req.Header.Set("Click", clickURL)
+			req.Header.Set("Actions", fmt.Sprintf("view, Open Link, %s", clickURL))
+		}
 
 		startTime := time.Now()
 		resp, err := n.client.Do(req)

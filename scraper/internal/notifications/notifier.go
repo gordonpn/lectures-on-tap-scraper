@@ -7,6 +7,7 @@ type Notification struct {
 	EventID string
 	Body    string
 	State   string
+	URL     string
 }
 
 // Notifier publishes notifications to a single destination.

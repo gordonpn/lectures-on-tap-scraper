@@ -521,7 +521,7 @@ func publishEventNotifications(ctx context.Context, primary notifications.Notifi
 	if e.Venue != nil {
 		state = e.Venue.Address.Region
 	}
-	n := notifications.Notification{EventID: e.ID, Body: msg, State: state}
+	n := notifications.Notification{EventID: e.ID, Body: msg, State: state, URL: strings.TrimSpace(e.URL)}
 
 	if err := primary.Notify(ctx, n); err != nil {
 		log.Printf("failed to publish notification via %s for event %s: %v", primary.Name(), e.ID, err)
