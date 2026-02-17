@@ -31,8 +31,7 @@ What it does:
 
 Requirements:
 - `.env` file in the workspace root with `EVENTBRITE_ORGANIZER_ID`, `EVENTBRITE_TOKEN`, and `NTFY_TOPIC_URL`
-- Optional second destination (disabled by default): set `ENABLE_WEBHOOK_NOTIFIER=true` and `WEBHOOK_NOTIFY_URL`
-- Optional: `WEBHOOK_NOTIFY_TOKEN` for bearer auth on the webhook destination
+- Optional Discord destination (disabled by default): set `ENABLE_DISCORD_NOTIFIER=true` and `DISCORD_WEBHOOK_URL`
 - Optional: `HEALTHCHECKS_PING_URL` to enable Healthchecks start/success/fail pings
 - `lectures-notifier:main` image available locally (build with `docker build -t lectures-notifier:main .`) or override with `IMAGE=<your-image>`
 

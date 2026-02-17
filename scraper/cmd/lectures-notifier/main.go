@@ -256,9 +256,8 @@ type appConfig struct {
 	token               string
 	ntfyTopicURL        string
 	ntfyToken           string
-	webhookEnabled      bool
-	webhookURL          string
-	webhookToken        string
+	discordEnabled      bool
+	discordWebhookURL   string
 	healthchecksPingURL string
 }
 
@@ -306,11 +305,10 @@ func loadConfig(isLocal bool) appConfig {
 		log.Printf("ntfy bearer token configured (localNtfy=%t)", isLocalNtfy)
 	}
 
-	cfg.webhookEnabled = envBool("ENABLE_WEBHOOK_NOTIFIER", false)
-	if cfg.webhookEnabled {
-		cfg.webhookURL = mustEnv("WEBHOOK_NOTIFY_URL")
-		cfg.webhookToken = strings.TrimSpace(os.Getenv("WEBHOOK_NOTIFY_TOKEN"))
-		log.Printf("webhook notifier enabled")
+	cfg.discordEnabled = envBool("ENABLE_DISCORD_NOTIFIER", false)
+	if cfg.discordEnabled {
+		cfg.discordWebhookURL = mustEnv("DISCORD_WEBHOOK_URL")
+		log.Printf("discord notifier enabled")
 	}
 
 	return cfg
@@ -510,8 +508,8 @@ func formatEventMessage(e event) string {
 func buildNotifiers(httpClient *http.Client, cfg appConfig, m *metrics.Metrics) (notifications.Notifier, []notifications.Notifier) {
 	primary := notifications.NewNtfyNotifier(httpClient, cfg.ntfyTopicURL, cfg.ntfyToken, m)
 	var secondary []notifications.Notifier
-	if cfg.webhookEnabled {
-		secondary = append(secondary, notifications.NewWebhookNotifier(httpClient, cfg.webhookURL, cfg.webhookToken))
+	if cfg.discordEnabled {
+		secondary = append(secondary, notifications.NewDiscordNotifier(httpClient, cfg.discordWebhookURL))
 	}
 	return primary, secondary
 }
