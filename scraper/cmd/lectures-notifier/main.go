@@ -324,16 +324,25 @@ func pingHealthchecks(client *http.Client, baseURL, suffix string) {
 		url = url + "/" + suffix
 	}
 
-	req, _ := http.NewRequest("GET", url, nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("healthchecks ping %q failed: %v", suffix, err)
-		return
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("healthchecks ping %q returned status %d", suffix, resp.StatusCode)
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		req, _ := http.NewRequest("GET", url, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("healthchecks ping %q failed (attempt %d/%d): %v", suffix, attempt, maxRetries, err)
+		} else {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return
+			}
+			log.Printf("healthchecks ping %q returned status %d (attempt %d/%d)", suffix, resp.StatusCode, attempt, maxRetries)
+		}
+		if attempt < maxRetries {
+			wait := time.Duration(1<<uint(attempt-1)) * time.Second
+			log.Printf("healthchecks ping %q retrying in %v", suffix, wait)
+			time.Sleep(wait)
+		}
 	}
 }
 
