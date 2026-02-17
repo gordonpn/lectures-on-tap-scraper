@@ -1,86 +1,45 @@
-# Notification Hub
+# Lectures on Tap Scraper
 
-A small PWA + Phoenix API for managing a single-user push-notification hub.
+Go scraper/notifier for Lectures on Tap events, with optional local `redis` + `ntfy` services.
 
 ## Quick start (local)
 
-1. Copy env file and fill secrets:
+1. Copy env file and set required values:
 
 ```sh
 cp .env.example .env
 ```
 
-2. Start dependencies:
+2. Build and run the notifier directly:
+
+```sh
+task scraper:build
+task scraper:run
+```
+
+3. Or start the Docker Compose stack (redis, ntfy, notifier):
 
 ```sh
 task docker:up
 ```
 
-This uses the root docker-compose.yml file.
-
-3. Run the API:
+Stop services:
 
 ```sh
-task dev:backend
+task docker:down
 ```
 
-4. Run the frontend dev server (optional):
+## Kubernetes scripts
+
+The scraper-specific Kubernetes manifests and helper scripts are in `scraper/k8s` and `scraper/scripts`.
+
+From repo root, use namespaced tasks:
 
 ```sh
-task dev:frontend
+task scraper:k8s:create-secret
+task scraper:k8s:docker-desktop-smoke
 ```
 
-Phoenix runs at http://localhost:4000 and serves built PWA assets from `backend/priv/static`.
+## More details
 
-## Build the PWA for Phoenix
-
-```sh
-task build
-```
-
-This outputs a static SPA into `backend/priv/static` and then digests assets.
-
-## Configuration
-
-Required env vars:
-
-- `HUB_PUBLIC_ORIGIN` (e.g. `https://lectures.gordon-pn.com`)
-- `HUB_UI_CODE` (single-user access code)
-- `HUB_SECRET` (shared secret for `/api/trigger`)
-- `VAPID_PUBLIC_KEY`
-- `VAPID_PRIVATE_KEY`
-- `VITE_VAPID_PUBLIC_KEY` (for the frontend bundle)
-- `SECRET_KEY_BASE`
-- `DATABASE_URL`
-
-Optional:
-
-- `VAPID_SUBJECT` (defaults to `HUB_PUBLIC_ORIGIN`)
-- `REDIS_URL` or `REDIS_ADDR` (for `/api/latest-scrape`)
-
-Generate VAPID keys once and store them in env vars (never regenerate on boot). For example:
-
-`VITE_VAPID_PUBLIC_KEY` should match `VAPID_PUBLIC_KEY` so the browser can subscribe.
-
-```sh
-npx web-push generate-vapid-keys
-```
-
-## API
-
-- `POST /api/subscribe` accepts `{ subscription, topic, ui_code }`
-- `POST /api/unsubscribe` accepts `{ endpoint }`
-- `GET /api/subscriptions/me?endpoint=...`
-- `POST /api/trigger` (requires `X-Hub-Secret`)
-- `POST /api/trigger-self` (requires `ui_code`, for UI test button)
-- `GET /api/latest-scrape`
-- `GET /healthz`
-
-## Production (k3s)
-
-These manifests are sample starting points. Set secrets via K3s secrets and point
-`DATABASE_URL` to your external Postgres instance.
-
-- `k8s/deployment.yaml`
-- `k8s/service.yaml`
-- `k8s/ingress.yaml`
+See `scraper/README.md` for full setup notes, topic URLs, and smoke-test workflow.
