@@ -15,21 +15,15 @@ fi
 
 NAMESPACE=${NAMESPACE:-default}
 IMAGE=${IMAGE:-lectures-notifier:main}
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+SCRAPER_DIR=$(cd -- "$SCRIPT_DIR/../scraper" && pwd)
 
 kubectl config use-context "$CTX"
 
-# create secret from .env
-if [ ! -f .env ]; then
-  echo "Error: .env file not found (needed for secret)"
-  exit 1
-fi
+# create/update secret from repository-root .env
+"$SCRIPT_DIR/k8s-create-secret.sh"
 
-kubectl create secret generic lectures-notifier-secrets \
-  --from-env-file=.env \
-  --namespace="$NAMESPACE" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-kubectl apply -n "$NAMESPACE" -f k8s/
+kubectl apply -n "$NAMESPACE" -f "$SCRAPER_DIR/k8s/"
 
 cronjobs=$(kubectl get cronjob -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 
