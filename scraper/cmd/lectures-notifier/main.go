@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gordonpn/lectures-on-tap-scraper/internal/metrics"
+	"github.com/gordonpn/lectures-on-tap-scraper/internal/notifications"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -250,86 +250,15 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string, m *metrics.Met
 	return all, nil
 }
 
-func retryAfterDelay(header string, attempt int, base time.Duration) time.Duration {
-	if header != "" {
-		if secs, err := strconv.Atoi(header); err == nil && secs >= 0 {
-			return time.Duration(secs) * time.Second
-		}
-		if t, err := http.ParseTime(header); err == nil {
-			d := time.Until(t)
-			if d > 0 {
-				return d
-			}
-		}
-	}
-
-	backoff := base * time.Duration(1<<uint(attempt-1))
-	jitter := time.Duration(rand.Int63n(int64(base)))
-	return backoff + jitter
-}
-
-func publishNtfy(client *http.Client, topicURL, msg, token string, m *metrics.Metrics) error {
-	log.Printf("publishing notification to ntfy topic (message size: %d bytes)", len(msg))
-
-	const maxAttempts = 5
-	baseDelay := time.Second
-
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		req, _ := http.NewRequest("POST", topicURL, bytes.NewBufferString(msg))
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
-		req.Header.Set("Priority", "max")
-
-		startTime := time.Now()
-		resp, err := client.Do(req)
-		elapsed := time.Since(startTime)
-
-		if err != nil {
-			log.Printf("error posting to ntfy (attempt %d/%d): %v", attempt, maxAttempts, err)
-			m.RecordNtfyPublish(elapsed, err)
-			if attempt == maxAttempts {
-				return err
-			}
-			wait := retryAfterDelay("", attempt, baseDelay)
-			time.Sleep(wait)
-			continue
-		}
-
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusTooManyRequests {
-			wait := retryAfterDelay(resp.Header.Get("Retry-After"), attempt, baseDelay)
-			log.Printf("ntfy rate limited (attempt %d/%d), waiting %v before retry: %s", attempt, maxAttempts, wait, string(body))
-			m.RecordNtfyPublish(elapsed, fmt.Errorf("rate limited"))
-			if attempt == maxAttempts {
-				return fmt.Errorf("ntfy rate limited after %d attempts: %s", maxAttempts, string(body))
-			}
-			time.Sleep(wait)
-			continue
-		}
-
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			err := fmt.Errorf("ntfy status %d: %s", resp.StatusCode, string(body))
-			log.Printf("error response from ntfy: %v", err)
-			m.RecordNtfyPublish(elapsed, err)
-			return err
-		}
-
-		m.RecordNtfyPublish(elapsed, nil)
-		return nil
-	}
-
-	return fmt.Errorf("ntfy publish failed after %d attempts", maxAttempts)
-}
-
 type appConfig struct {
 	isLocal             bool
 	orgID               string
 	token               string
 	ntfyTopicURL        string
 	ntfyToken           string
+	webhookEnabled      bool
+	webhookURL          string
+	webhookToken        string
 	healthchecksPingURL string
 }
 
@@ -372,11 +301,18 @@ func loadConfig(isLocal bool) appConfig {
 		} else {
 			log.Printf("ntfy bearer token not set (optional for local ntfy, localNtfy=%t)", isLocalNtfy)
 		}
-		return cfg
+	} else {
+		cfg.ntfyToken = mustEnv("NTFY_TOKEN")
+		log.Printf("ntfy bearer token configured (localNtfy=%t)", isLocalNtfy)
 	}
 
-	cfg.ntfyToken = mustEnv("NTFY_TOKEN")
-	log.Printf("ntfy bearer token configured (localNtfy=%t)", isLocalNtfy)
+	cfg.webhookEnabled = envBool("ENABLE_WEBHOOK_NOTIFIER", false)
+	if cfg.webhookEnabled {
+		cfg.webhookURL = mustEnv("WEBHOOK_NOTIFY_URL")
+		cfg.webhookToken = strings.TrimSpace(os.Getenv("WEBHOOK_NOTIFY_TOKEN"))
+		log.Printf("webhook notifier enabled")
+	}
+
 	return cfg
 }
 
@@ -412,6 +348,12 @@ func runNotifier(httpClient *http.Client, cfg appConfig, isLocal bool, m *metric
 
 	ctx := context.Background()
 	redisClient, dedupeCfg := initRedis(ctx, isLocal, m)
+	var primaryNotifier notifications.Notifier
+	var secondaryNotifiers []notifications.Notifier
+	if !isLocal {
+		primaryNotifier, secondaryNotifiers = buildNotifiers(httpClient, cfg, m)
+	}
+
 	now := time.Now()
 	notifyEvents, availableCount := filterEvents(ctx, all, redisClient, dedupeCfg, now, m)
 	m.RecordEventsAvailable(availableCount)
@@ -433,7 +375,7 @@ func runNotifier(httpClient *http.Client, cfg appConfig, isLocal bool, m *metric
 			log.Println(msg)
 			continue
 		}
-		publishEventNotifications(httpClient, cfg, e, msg, m)
+		publishEventNotifications(ctx, primaryNotifier, secondaryNotifiers, e, msg, m)
 	}
 
 	return nil
@@ -565,47 +507,33 @@ func formatEventMessage(e event) string {
 	return fmt.Sprintf("%s %s (%s) %s", city, e.Name.Text, timeStr, e.URL)
 }
 
-func stateTopicSlug(state string) string {
-	stateLower := strings.ToLower(strings.TrimSpace(state))
-	if stateLower == "" {
-		return ""
+func buildNotifiers(httpClient *http.Client, cfg appConfig, m *metrics.Metrics) (notifications.Notifier, []notifications.Notifier) {
+	primary := notifications.NewNtfyNotifier(httpClient, cfg.ntfyTopicURL, cfg.ntfyToken, m)
+	var secondary []notifications.Notifier
+	if cfg.webhookEnabled {
+		secondary = append(secondary, notifications.NewWebhookNotifier(httpClient, cfg.webhookURL, cfg.webhookToken))
 	}
-	var b strings.Builder
-	for _, r := range stateLower {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return primary, secondary
 }
 
-func publishEventNotifications(client *http.Client, cfg appConfig, e event, msg string, m *metrics.Metrics) {
-	if err := publishNtfy(client, cfg.ntfyTopicURL, msg, cfg.ntfyToken, m); err != nil {
-		log.Printf("failed to publish notification for event %s: %v", e.ID, err)
-		return
-	}
-	m.RecordEventNotified()
-	log.Printf("ntfy publish ok | topic=%s | bytes=%d | msg=%s", cfg.ntfyTopicURL, len(msg), msg)
-
+func publishEventNotifications(ctx context.Context, primary notifications.Notifier, secondary []notifications.Notifier, e event, msg string, m *metrics.Metrics) {
 	state := ""
 	if e.Venue != nil {
 		state = e.Venue.Address.Region
 	}
-	stateSlug := stateTopicSlug(state)
-	if stateSlug == "" {
-		if strings.TrimSpace(state) != "" {
-			log.Printf("skipping state-specific publish for event %s: derived empty state slug", e.ID)
-		}
-		return
-	}
+	n := notifications.Notification{EventID: e.ID, Body: msg, State: state}
 
-	base := strings.TrimSuffix(cfg.ntfyTopicURL, "-")
-	stateTopicURL := fmt.Sprintf("%s-%s", base, stateSlug)
-	if err := publishNtfy(client, stateTopicURL, msg, cfg.ntfyToken, m); err != nil {
-		log.Printf("failed to publish state-specific notification for event %s (state=%s): %v", e.ID, strings.ToLower(strings.TrimSpace(state)), err)
+	if err := primary.Notify(ctx, n); err != nil {
+		log.Printf("failed to publish notification via %s for event %s: %v", primary.Name(), e.ID, err)
 		return
 	}
-	log.Printf("ntfy publish ok | topic=%s | state=%s | bytes=%d | msg=%s", stateTopicURL, strings.ToLower(strings.TrimSpace(state)), len(msg), msg)
+	m.RecordEventNotified()
+
+	for _, notifier := range secondary {
+		if err := notifier.Notify(ctx, n); err != nil {
+			log.Printf("secondary notifier %s failed for event %s: %v", notifier.Name(), e.ID, err)
+		}
+	}
 }
 
 func main() {
