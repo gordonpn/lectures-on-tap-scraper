@@ -28,6 +28,20 @@ tasks:
     cmds:
       - ../scripts/k8s-docker-desktop-smoke.sh
 
+  k8s:deploy-cronjobs:
+    desc: Deploy CronJobs manifest
+    vars:
+      NAMESPACE: '{{default "default" .NAMESPACE}}'
+    cmds:
+      - kubectl -n {{.NAMESPACE}} apply -f k8s/cronjob.yaml
+
+  k8s:cleanup-old-cronjobs:
+    desc: Delete old CT/PT and legacy ET split CronJobs
+    vars:
+      NAMESPACE: '{{default "default" .NAMESPACE}}'
+    cmds:
+      - kubectl -n {{.NAMESPACE}} get cronjobs -o name | grep -E 'cronjob.batch/lectures-notifier-(ct|pt)-|cronjob.batch/lectures-notifier-et-' | grep -v 'cronjob.batch/lectures-notifier-et-10m$' | xargs -r kubectl -n {{.NAMESPACE}} delete
+
   grafana:dashboard:generate:
     desc: Generate dashboard.json from Grafana Foundation SDK
     cmds:
