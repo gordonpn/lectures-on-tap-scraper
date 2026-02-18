@@ -314,17 +314,19 @@ func loadConfig(isLocal bool) appConfig {
 	return cfg
 }
 
-func pingHealthchecks(client *http.Client, baseURL, suffix string) {
+func pingHealthchecks(client *http.Client, baseURL, suffix string, maxRetries int) {
 	base := strings.TrimSpace(baseURL)
 	if base == "" {
 		return
+	}
+	if maxRetries < 1 {
+		maxRetries = 1
 	}
 	url := strings.TrimRight(base, "/")
 	if suffix != "" {
 		url = url + "/" + suffix
 	}
 
-	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		req, _ := http.NewRequest("GET", url, nil)
 		resp, err := client.Do(req)
@@ -554,14 +556,14 @@ func main() {
 	startTime := time.Now()
 	metricsClient.RecordExecutionStart(ctx)
 
-	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "start")
+	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "start", 3)
 	if err := runNotifier(httpClient, cfg, isLocal, metricsClient); err != nil {
-		pingHealthchecks(httpClient, cfg.healthchecksPingURL, "fail")
+		pingHealthchecks(httpClient, cfg.healthchecksPingURL, "fail", 1)
 		metricsClient.RecordExecutionFailure(ctx, time.Since(startTime), err.Error())
 		_ = metricsClient.Push(ctx)
 		log.Fatalf("notifier run failed: %v", err)
 	}
 	metricsClient.RecordExecutionSuccess(ctx, time.Since(startTime))
 	_ = metricsClient.Push(ctx)
-	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "")
+	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "", 3)
 }
