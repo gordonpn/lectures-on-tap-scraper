@@ -200,7 +200,7 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string, m *metrics.Met
 
 		var resp *http.Response
 		var err error
-		maxRetries := 3
+		maxRetries := 4
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			startTime := time.Now()
 			resp, err = client.Do(req)
@@ -209,8 +209,22 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string, m *metrics.Met
 			m.RecordEventBriteFetchPageDuration(elapsed)
 
 			if err == nil {
-				break
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					break
+				}
+				// Not a 2xx status code. Read body and close it before potential retry.
+				body, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				err = fmt.Errorf("eventbrite status %d: %s", resp.StatusCode, string(body))
+
+				// Don't retry for permanent errors (4xx except 429)
+				if resp.StatusCode != 429 && (resp.StatusCode >= 400 && resp.StatusCode < 500) {
+					log.Printf("permanent error from EventBrite: %v", err)
+					m.RecordEventBriteFetch(0, err)
+					return nil, err
+				}
 			}
+
 			if attempt < maxRetries {
 				waitTime := time.Duration(1<<uint(attempt-1)) * time.Second
 				log.Printf("error making request to EventBrite (attempt %d): %v, retrying in %v", attempt, err, waitTime)
@@ -221,13 +235,11 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string, m *metrics.Met
 				return nil, err
 			}
 		}
-		defer resp.Body.Close()
 
-		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			err := fmt.Errorf("eventbrite status %d: %s", resp.StatusCode, string(body))
-			log.Printf("error response from EventBrite: %v", err)
-			m.RecordEventBriteFetch(0, err)
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("error reading EventBrite response body: %v", err)
 			return nil, err
 		}
 
@@ -558,7 +570,6 @@ func main() {
 
 	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "start", 3)
 	if err := runNotifier(httpClient, cfg, isLocal, metricsClient); err != nil {
-		pingHealthchecks(httpClient, cfg.healthchecksPingURL, "fail", 1)
 		metricsClient.RecordExecutionFailure(ctx, time.Since(startTime), err.Error())
 		_ = metricsClient.Push(ctx)
 		log.Fatalf("notifier run failed: %v", err)
