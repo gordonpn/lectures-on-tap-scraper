@@ -56,3 +56,4 @@ The project uses `task` for orchestration.
 - **Error Handling:** Implement retries for external services (Redis, EventBrite) as seen in `main.go`.
 - **Iterative Development:** Make granular commits as you progress through tasks, ensuring each commit follows the [Conventional Commits](https://www.conventionalcommits.org/) specification.
 - **Project Context:** Always reference other Markdown files in the repository (e.g., `README.md`) to maintain a comprehensive understanding of the project's goals and history.
+- **Project Instructions:** Proactively update `GEMINI.md` as the project evolves, ensuring architectural decisions, new workflows, and updated conventions are documented for future sessions.
