@@ -54,3 +54,5 @@ The project uses `task` for orchestration.
 - **Metrics:** Instrument new features using the `internal/metrics` package. Ensure metrics are pushed via `metricsClient.Push(ctx)` before the application exits.
 - **Task-Based Workflow:** Always use `Taskfile.yml` for common commands to ensure consistency across environments.
 - **Error Handling:** Implement retries for external services (Redis, EventBrite) as seen in `main.go`.
+- **Iterative Development:** Make granular commits as you progress through tasks, ensuring each commit follows the [Conventional Commits](https://www.conventionalcommits.org/) specification.
+- **Project Context:** Always reference other Markdown files in the repository (e.g., `README.md`) to maintain a comprehensive understanding of the project's goals and history.
