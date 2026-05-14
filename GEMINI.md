@@ -57,3 +57,13 @@ The project uses `task` for orchestration.
 - **Iterative Development:** Make granular commits as you progress through tasks, ensuring each commit follows the [Conventional Commits](https://www.conventionalcommits.org/) specification.
 - **Project Context:** Always reference other Markdown files in the repository (e.g., `README.md`) to maintain a comprehensive understanding of the project's goals and history.
 - **Project Instructions:** Proactively update `GEMINI.md` as the project evolves, ensuring architectural decisions, new workflows, and updated conventions are documented for future sessions.
+
+## Reliability Post-Mortem (BOS-MTL Outage)
+
+A multi-site outage (Internet failure in Boston) revealed several architectural vulnerabilities in the project:
+
+- **Aggressive Redis Retries:** The `main.go` Redis connection logic attempts 10 retries with exponential backoff (totalling ~34 minutes). In a cross-site outage, this causes the pod to hang.
+- **Concurrency Deadlock:** The Kubernetes `concurrencyPolicy: Forbid` in `cronjob.yaml` prevents new jobs from starting while a previous job is hung in the Redis retry loop, leading to a complete system stall.
+- **Lack of Global Timeout:** The application lacks a top-level `context.WithTimeout`, meaning it can run indefinitely if multiple external services (Redis, ntfy, EventBrite) hit their individual timeouts/retries sequentially.
+- **Synchronous Bottlenecks:** Notifications are published synchronously. If the notification service is slow or unreachable, it further delays the completion of the job and the success ping to Healthchecks.io.
+- **Healthcheck Brittleness:** The "success" signal is only sent at the absolute end of execution. Any hang in the middle results in a false "DOWN" alert even if the node is technically healthy.
