@@ -37,7 +37,13 @@ If you receive alerts that resolve quickly:
 *   **Check:** Verify the pod logs in Kubernetes. Look for "retrying" messages.
 *   **Action:** Ensure the Healthchecks.io schedule matches the CronJob schedule and has an appropriate grace period (e.g., 2 minutes).
 
-### 2. EventBrite API Errors
+### 2. TooManyMissedTimes / CronJob Lock-up
+If the CronJob stops triggering and you see `Warning: TooManyMissedTimes` in `kubectl describe cronjob`:
+*   **Cause:** Kubernetes stops scheduling a CronJob if it misses >100 runs. This often happens with restricted schedules (e.g., `10-18`) because the overnight gap exceeds the 100-missed-run threshold for a 5-minute schedule.
+*   **Fix:** The `startingDeadlineSeconds: 300` setting in the CronJob spec limits the lookback window, preventing the controller from counting the overnight gap as missed runs.
+*   **Action:** If the job is stuck, you may need to delete and recreate the CronJob manifest.
+
+### 3. EventBrite API Errors
 The scraper retries EventBrite requests up to 4 times with exponential backoff for:
 *   HTTP 429 (Rate Limited)
 *   HTTP 5xx (Server Error)
