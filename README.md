@@ -2,6 +2,8 @@
 
 Go scraper/notifier for Lectures on Tap events, with optional local `redis` + `ntfy` services.
 
+For operational guidance and debugging, see [RUNBOOK.md](RUNBOOK.md).
+
 ![healthchecks.io](https://healthchecks.io/badge/63a82bd5-b473-430b-9745-22843eff864e/ckgqM2Fm-2.svg)
 
 Subscription links:
