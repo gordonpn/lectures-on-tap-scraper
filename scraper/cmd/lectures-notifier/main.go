@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gordonpn/lectures-on-tap-scraper/internal/metrics"
@@ -19,8 +20,8 @@ import (
 )
 
 const (
-	maxRedisAttempts = 10
-	redisBaseDelay   = 2 * time.Second
+	maxRedisAttempts = 3
+	redisBaseDelay   = 1 * time.Second
 )
 
 type ebResp struct {
@@ -184,7 +185,7 @@ func retryRedisConnection(ctx context.Context, redisClient *redis.Client, maxAtt
 	return nil, fmt.Errorf("redis connection failed after %d attempts", maxAttempts)
 }
 
-func fetchAllLiveEvents(client *http.Client, orgID, token string, m *metrics.Metrics) ([]event, error) {
+func fetchAllLiveEvents(ctx context.Context, client *http.Client, orgID, token string, m *metrics.Metrics) ([]event, error) {
 	log.Printf("starting to fetch live events from EventBrite for organizer %s", orgID)
 	var all []event
 	page := 1
@@ -195,7 +196,7 @@ func fetchAllLiveEvents(client *http.Client, orgID, token string, m *metrics.Met
 			orgID, page,
 		)
 		log.Printf("fetching page %d from EventBrite", page)
-		req, _ := http.NewRequest("GET", url, nil)
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 
 		var resp *http.Response
@@ -326,7 +327,7 @@ func loadConfig(isLocal bool) appConfig {
 	return cfg
 }
 
-func pingHealthchecks(client *http.Client, baseURL, suffix string, maxRetries int) {
+func pingHealthchecks(ctx context.Context, client *http.Client, baseURL, suffix string, maxRetries int) {
 	base := strings.TrimSpace(baseURL)
 	if base == "" {
 		return
@@ -340,7 +341,7 @@ func pingHealthchecks(client *http.Client, baseURL, suffix string, maxRetries in
 	}
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		req, _ := http.NewRequest("GET", url, nil)
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("healthchecks ping %q failed (attempt %d/%d): %v", suffix, attempt, maxRetries, err)
@@ -360,14 +361,13 @@ func pingHealthchecks(client *http.Client, baseURL, suffix string, maxRetries in
 	}
 }
 
-func runNotifier(httpClient *http.Client, cfg appConfig, isLocal bool, m *metrics.Metrics) error {
-	all, err := fetchAllLiveEvents(httpClient, cfg.orgID, cfg.token, m)
+func runNotifier(ctx context.Context, httpClient *http.Client, cfg appConfig, isLocal bool, m *metrics.Metrics) error {
+	all, err := fetchAllLiveEvents(ctx, httpClient, cfg.orgID, cfg.token, m)
 	if err != nil {
 		return fmt.Errorf("failed to fetch events: %w", err)
 	}
 	m.RecordEventsProcessed(len(all))
 
-	ctx := context.Background()
 	redisClient, dedupeCfg := initRedis(ctx, isLocal, m)
 	var primaryNotifier notifications.Notifier
 	var secondaryNotifiers []notifications.Notifier
@@ -544,17 +544,23 @@ func publishEventNotifications(ctx context.Context, primary notifications.Notifi
 	}
 	n := notifications.Notification{EventID: e.ID, Body: msg, State: state, URL: strings.TrimSpace(e.URL)}
 
-	if err := primary.Notify(ctx, n); err != nil {
-		log.Printf("failed to publish notification via %s for event %s: %v", primary.Name(), e.ID, err)
-		return
+	allNotifiers := append([]notifications.Notifier{primary}, secondary...)
+	
+	// Create a wait group to wait for all notifications for this event
+	var wg sync.WaitGroup
+	for _, notifier := range allNotifiers {
+		wg.Add(1)
+		go func(ntf notifications.Notifier) {
+			defer wg.Done()
+			if err := ntf.Notify(ctx, n); err != nil {
+				log.Printf("failed to publish notification via %s for event %s: %v", ntf.Name(), e.ID, err)
+			} else if ntf.Name() == primary.Name() {
+				// Record metrics only for primary (or maybe all, but following existing pattern)
+				m.RecordEventNotified()
+			}
+		}(notifier)
 	}
-	m.RecordEventNotified()
-
-	for _, notifier := range secondary {
-		if err := notifier.Notify(ctx, n); err != nil {
-			log.Printf("secondary notifier %s failed for event %s: %v", notifier.Name(), e.ID, err)
-		}
-	}
+	wg.Wait()
 }
 
 func main() {
@@ -564,17 +570,26 @@ func main() {
 	cfg := loadConfig(isLocal)
 	httpClient := &http.Client{Timeout: 45 * time.Second}
 	metricsClient := metrics.InitializeMetricsFromEnv(isLocal)
-	ctx := context.Background()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	startTime := time.Now()
 	metricsClient.RecordExecutionStart(ctx)
 
-	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "start", 3)
-	if err := runNotifier(httpClient, cfg, isLocal, metricsClient); err != nil {
+	pingHealthchecks(ctx, httpClient, cfg.healthchecksPingURL, "start", 3)
+	if err := runNotifier(ctx, httpClient, cfg, isLocal, metricsClient); err != nil {
 		metricsClient.RecordExecutionFailure(ctx, time.Since(startTime), err.Error())
-		_ = metricsClient.Push(ctx)
+
+		// Use a separate short-lived context for final reporting if the main one timed out
+		reportCtx, reportCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer reportCancel()
+		_ = metricsClient.Push(reportCtx)
+		pingHealthchecks(reportCtx, httpClient, cfg.healthchecksPingURL, "fail", 3)
+
 		log.Fatalf("notifier run failed: %v", err)
 	}
 	metricsClient.RecordExecutionSuccess(ctx, time.Since(startTime))
 	_ = metricsClient.Push(ctx)
-	pingHealthchecks(httpClient, cfg.healthchecksPingURL, "", 3)
+	pingHealthchecks(ctx, httpClient, cfg.healthchecksPingURL, "", 3)
 }
