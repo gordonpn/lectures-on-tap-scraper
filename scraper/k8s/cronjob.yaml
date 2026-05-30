@@ -9,7 +9,7 @@ spec:
   timeZone: "America/New_York"
   schedule: "*/5 10-18 * * *"   # every 5 minutes from 10:00 to 18:59 ET
   startingDeadlineSeconds: 300
-  concurrencyPolicy: Forbid
+  concurrencyPolicy: Replace
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   jobTemplate:
