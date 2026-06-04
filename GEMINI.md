@@ -58,12 +58,14 @@ The project uses `task` for orchestration.
 - **Project Context:** Always reference other Markdown files in the repository (e.g., `README.md`) to maintain a comprehensive understanding of the project's goals and history.
 - **Project Instructions:** Proactively update `GEMINI.md` as the project evolves, ensuring architectural decisions, new workflows, and updated conventions are documented for future sessions.
 
-## Reliability Post-Mortem (BOS-MTL Outage)
+## Reliability Post-Mortem (BOS-MTL Outage) - RESOLVED
 
-A multi-site outage (Internet failure in Boston) revealed several architectural vulnerabilities in the project:
+A multi-site outage (Internet failure in Boston) revealed several architectural vulnerabilities in the project, which have since been addressed:
 
-- **Aggressive Redis Retries:** The `main.go` Redis connection logic attempts 10 retries with exponential backoff (totalling ~34 minutes). In a cross-site outage, this causes the pod to hang.
-- **Concurrency Deadlock:** The Kubernetes `concurrencyPolicy: Forbid` in `cronjob.yaml` prevents new jobs from starting while a previous job is hung in the Redis retry loop, leading to a complete system stall.
-- **Lack of Global Timeout:** The application lacks a top-level `context.WithTimeout`, meaning it can run indefinitely if multiple external services (Redis, ntfy, EventBrite) hit their individual timeouts/retries sequentially.
-- **Synchronous Bottlenecks:** Notifications are published synchronously. If the notification service is slow or unreachable, it further delays the completion of the job and the success ping to Healthchecks.io.
-- **Healthcheck Brittleness:** The "success" signal is only sent at the absolute end of execution. Any hang in the middle results in a false "DOWN" alert even if the node is technically healthy.
+- **Aggressive Redis Retries:** Reduced to 3 attempts with 1s base delay.
+- **Concurrency Deadlock:** Switched to `concurrencyPolicy: Replace` in `cronjob.yaml`.
+- **Lack of Global Timeout:** Implemented a 5-minute global context timeout with loop-level cancellation checks.
+- **Synchronous Bottlenecks:** Notifications are now published concurrently.
+- **Healthcheck Brittleness:** Added "start", "fail", and "success" signals with robust context handling to ensure delivery even during timeouts.
+- **Circuit Breaking:** Added logic to stop Redis reconnection attempts after a failure to prevent redundant timeouts.
+- **Best-Effort Delivery:** Changed notification logic to proceed even if Redis is unavailable, ensuring alerts are sent whenever possible.
