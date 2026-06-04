@@ -386,6 +386,9 @@ func runNotifier(ctx context.Context, httpClient *http.Client, cfg appConfig, is
 	}
 
 	for _, e := range notifyEvents {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("notifier stopped early: %w", err)
+		}
 		redisClient = ensureRedisForNotification(ctx, isLocal, redisClient, m)
 		if redisClient == nil {
 			continue
