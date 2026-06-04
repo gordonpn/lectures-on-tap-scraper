@@ -599,6 +599,10 @@ func main() {
 		log.Fatalf("notifier run failed: %v", err)
 	}
 	metricsClient.RecordExecutionSuccess(ctx, time.Since(startTime))
-	_ = metricsClient.Push(ctx)
-	pingHealthchecks(ctx, httpClient, cfg.healthchecksPingURL, "", 3)
+
+	// Use a separate short-lived context for final reporting to ensure it's sent
+	reportCtx, reportCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer reportCancel()
+	_ = metricsClient.Push(reportCtx)
+	pingHealthchecks(reportCtx, httpClient, cfg.healthchecksPingURL, "", 3)
 }
