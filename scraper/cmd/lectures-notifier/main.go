@@ -369,6 +369,8 @@ func runNotifier(ctx context.Context, httpClient *http.Client, cfg appConfig, is
 	m.RecordEventsProcessed(len(all))
 
 	redisClient, dedupeCfg := initRedis(ctx, isLocal, m)
+	redisBroken := redisClient == nil && strings.TrimSpace(os.Getenv("REDIS_ADDR")) != ""
+
 	var primaryNotifier notifications.Notifier
 	var secondaryNotifiers []notifications.Notifier
 	if !isLocal {
@@ -389,10 +391,14 @@ func runNotifier(ctx context.Context, httpClient *http.Client, cfg appConfig, is
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("notifier stopped early: %w", err)
 		}
-		redisClient = ensureRedisForNotification(ctx, isLocal, redisClient, m)
-		if redisClient == nil {
-			continue
+
+		if !redisBroken && redisClient == nil {
+			redisClient = ensureRedisForNotification(ctx, isLocal, redisClient, m)
+			if redisClient == nil {
+				redisBroken = true
+			}
 		}
+
 		msg := formatEventMessage(e)
 		if isLocal {
 			log.Printf("local mode: printing message to stdout (event=%s bytes=%d)", e.ID, len(msg))
@@ -512,7 +518,7 @@ func ensureRedisForNotification(ctx context.Context, isLocal bool, redisClient *
 	}
 	verifiedClient, err := retryRedisConnection(ctx, tempClient, maxRedisAttempts, redisBaseDelay, m)
 	if err != nil {
-		log.Printf("redis reconnection failed, skipping notification: %v", err)
+		log.Printf("redis reconnection failed, proceeding without dedupe: %v", err)
 		return nil
 	}
 	log.Printf("redis connection restored; continuing with notifications")
