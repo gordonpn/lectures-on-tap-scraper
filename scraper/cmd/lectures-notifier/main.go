@@ -586,23 +586,38 @@ func main() {
 	startTime := time.Now()
 	metricsClient.RecordExecutionStart(ctx)
 
-	pingHealthchecks(ctx, httpClient, cfg.healthchecksPingURL, "start", 3)
-	if err := runNotifier(ctx, httpClient, cfg, isLocal, metricsClient); err != nil {
-		metricsClient.RecordExecutionFailure(ctx, time.Since(startTime), err.Error())
+	var runErr error
+	var panicVal interface{}
 
-		// Use a separate short-lived context for final reporting if the main one timed out
+	// Robust exit handler to catch panics/errors and push final execution status
+	defer func() {
+		duration := time.Since(startTime)
+		if r := recover(); r != nil {
+			panicVal = r
+			runErr = fmt.Errorf("panic: %v", r)
+		}
+
+		// Use a separate context to ensure pushing and pinging occur even if main context expired
 		reportCtx, reportCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer reportCancel()
-		_ = metricsClient.Push(reportCtx)
-		pingHealthchecks(reportCtx, httpClient, cfg.healthchecksPingURL, "fail", 3)
 
-		log.Fatalf("notifier run failed: %v", err)
-	}
-	metricsClient.RecordExecutionSuccess(ctx, time.Since(startTime))
+		if runErr != nil {
+			metricsClient.RecordExecutionFailure(reportCtx, duration, runErr.Error())
+			_ = metricsClient.Push(reportCtx)
+			pingHealthchecks(reportCtx, httpClient, cfg.healthchecksPingURL, "fail", 3)
 
-	// Use a separate short-lived context for final reporting to ensure it's sent
-	reportCtx, reportCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer reportCancel()
-	_ = metricsClient.Push(reportCtx)
-	pingHealthchecks(reportCtx, httpClient, cfg.healthchecksPingURL, "", 3)
+			if panicVal != nil {
+				log.Fatalf("notifier panicked: %v", panicVal)
+			} else {
+				log.Fatalf("notifier run failed: %v", runErr)
+			}
+		} else {
+			metricsClient.RecordExecutionSuccess(reportCtx, duration)
+			_ = metricsClient.Push(reportCtx)
+			pingHealthchecks(reportCtx, httpClient, cfg.healthchecksPingURL, "", 3)
+		}
+	}()
+
+	pingHealthchecks(ctx, httpClient, cfg.healthchecksPingURL, "start", 3)
+	runErr = runNotifier(ctx, httpClient, cfg, isLocal, metricsClient)
 }

@@ -11,186 +11,151 @@ import (
 	"github.com/prometheus/client_golang/prometheus/push"
 )
 
-// Metrics holds all Prometheus metrics for the notifier
+// Metrics holds all Prometheus metrics for the notifier using the idiomatic batch pattern.
+// All execution metrics are recorded at the end of each run to avoid zombie/stale metrics in the Pushgateway.
 type Metrics struct {
-	// Execution tracking
-	ExecutionStartTime     prometheus.Counter
-	ExecutionSuccess       prometheus.Counter
-	ExecutionFailure       prometheus.Counter
-	ExecutionDurationSecs  prometheus.Histogram
-	LastExecutionTimestamp prometheus.Gauge
+	// Execution and status metrics
+	LastSuccessTimestamp   prometheus.Gauge
+	LastRunSuccess         prometheus.Gauge
+	LastRunDurationSeconds  prometheus.Gauge
+	ExecutionDurationSecs   prometheus.Histogram
 
-	// Event processing metrics
-	EventsProcessedTotal        prometheus.Counter
-	EventsAvailableTotal        prometheus.Counter
-	EventsNotifiedTotal         prometheus.Counter
-	EventsDeduplicatedTotal     prometheus.Counter
-	EventsSoldOutTotal          prometheus.Counter
-	EventsWithoutStartTimeTotal prometheus.Counter
+	// Event processing volume metrics for the last run
+	LastRunItemsProcessed        prometheus.Gauge
+	LastRunItemsAvailable        prometheus.Gauge
+	LastRunItemsNotified         prometheus.Gauge
+	LastRunItemsDeduplicated     prometheus.Gauge
+	LastRunItemsSoldOut          prometheus.Gauge
+	LastRunItemsWithoutStartTime prometheus.Gauge
 
-	// API and external service metrics
-	EventBriteFetchErrorsTotal  prometheus.Counter
-	EventBriteFetchDurationSecs prometheus.Histogram
-	EventBritePagesFetchedTotal prometheus.Counter
+	// Redis metrics for the last run
+	LastRunRedisConnectionErrors  prometheus.Gauge
+	LastRunRedisOperationErrors   prometheus.Gauge
+	LastRunRedisConnectionRetries prometheus.Histogram
 
-	NtfyPublishErrorsTotal  prometheus.Counter
-	NtfyPublishDurationSecs prometheus.Histogram
-	NtfyPublishesTotal      prometheus.Counter
+	// API and external service metrics for the last run
+	LastRunEventBriteFetchErrors       prometheus.Gauge
+	LastRunEventBriteFetchDurationSecs prometheus.Histogram
+	LastRunEventBritePagesFetched      prometheus.Gauge
 
-	// Redis metrics
-	RedisConnectionErrorsTotal prometheus.Counter
-	RedisOperationErrorsTotal  prometheus.Counter
-	RedisConnectionRetries     prometheus.Histogram
-
-	// Error tracking
-	ErrorsTotal prometheus.Counter
-
-	// Last run info
-	LastRunStatus    prometheus.Gauge // 0 = unknown, 1 = success, 2 = failure
-	LastErrorMessage prometheus.Gauge
+	LastRunNtfyPublishErrors       prometheus.Gauge
+	LastRunNtfyPublishDurationSecs prometheus.Histogram
+	LastRunNtfyPublishes           prometheus.Gauge
 
 	registry *prometheus.Registry
 	pusher   *push.Pusher
 }
 
-// NewMetrics creates a new Metrics instance
+// NewMetrics creates a new Metrics instance configured with the batch job metrics.
 func NewMetrics(pushgatewayURL, jobName string) *Metrics {
 	m := &Metrics{
-		ExecutionStartTime: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_execution_start_total",
-			Help: "Total number of times the notifier started execution",
+		LastSuccessTimestamp: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_success_timestamp_seconds",
+			Help: "Unix timestamp of the last successful execution",
 		}),
-		ExecutionSuccess: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_execution_success_total",
-			Help: "Total number of successful notifier executions",
+		LastRunSuccess: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_success",
+			Help: "Result of the last execution: 1 for success, 0 for failure",
 		}),
-		ExecutionFailure: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_execution_failure_total",
-			Help: "Total number of failed notifier executions",
+		LastRunDurationSeconds: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_duration_seconds",
+			Help: "Duration of the last execution in seconds",
 		}),
 		ExecutionDurationSecs: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name:    "lectures_notifier_execution_duration_seconds",
-			Help:    "Duration of notifier execution in seconds",
-			Buckets: []float64{1, 5, 10, 30, 60, 120, 300, 600},
-		}),
-		LastExecutionTimestamp: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lectures_notifier_last_execution_timestamp_seconds",
-			Help: "Unix timestamp of the last execution",
+			Name:    "scraper_execution_duration_seconds",
+			Help:    "Execution duration distribution across runs",
+			Buckets: []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 300},
 		}),
 
-		// Event processing
-		EventsProcessedTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_events_processed_total",
-			Help: "Total number of events processed from EventBrite",
+		LastRunItemsProcessed: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_items_processed_total",
+			Help: "Total number of events processed in the last execution",
 		}),
-		EventsAvailableTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_events_available_total",
-			Help: "Total number of events with available tickets",
+		LastRunItemsAvailable: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_items_available_total",
+			Help: "Number of events with available tickets in the last execution",
 		}),
-		EventsNotifiedTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_events_notified_total",
-			Help: "Total number of events that were notified",
+		LastRunItemsNotified: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_items_notified_total",
+			Help: "Number of events notified in the last execution",
 		}),
-		EventsDeduplicatedTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_events_deduplicated_total",
-			Help: "Total number of events skipped due to deduplication",
+		LastRunItemsDeduplicated: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_items_deduplicated_total",
+			Help: "Number of events deduplicated in the last execution",
 		}),
-		EventsSoldOutTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_events_sold_out_total",
-			Help: "Total number of events that became sold out",
+		LastRunItemsSoldOut: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_items_sold_out_total",
+			Help: "Number of events sold out in the last execution",
 		}),
-		EventsWithoutStartTimeTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_events_without_start_time_total",
-			Help: "Total number of events missing start time information",
-		}),
-
-		// EventBrite API
-		EventBriteFetchErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_eventbrite_fetch_errors_total",
-			Help: "Total number of EventBrite fetch errors",
-		}),
-		EventBriteFetchDurationSecs: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name:    "lectures_notifier_eventbrite_fetch_duration_seconds",
-			Help:    "Duration of EventBrite fetch requests in seconds",
-			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30},
-		}),
-		EventBritePagesFetchedTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_eventbrite_pages_fetched_total",
-			Help: "Total number of EventBrite API pages fetched",
+		LastRunItemsWithoutStartTime: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_items_without_start_time_total",
+			Help: "Number of events without start time in the last execution",
 		}),
 
-		// Ntfy notifications
-		NtfyPublishErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_ntfy_publish_errors_total",
-			Help: "Total number of ntfy publish errors",
+		LastRunRedisConnectionErrors: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_redis_connection_errors_total",
+			Help: "Number of Redis connection errors in the last execution",
 		}),
-		NtfyPublishDurationSecs: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name:    "lectures_notifier_ntfy_publish_duration_seconds",
-			Help:    "Duration of ntfy publish requests in seconds",
+		LastRunRedisOperationErrors: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_redis_operation_errors_total",
+			Help: "Number of Redis operation errors in the last execution",
+		}),
+		LastRunRedisConnectionRetries: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "scraper_last_run_redis_connection_retries",
+			Help:    "Distribution of Redis connection retry counts",
+			Buckets: []float64{1, 2, 3, 5},
+		}),
+
+		LastRunEventBriteFetchErrors: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_eventbrite_fetch_errors_total",
+			Help: "Number of EventBrite API fetch errors in the last execution",
+		}),
+		LastRunEventBriteFetchDurationSecs: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "scraper_last_run_eventbrite_fetch_duration_seconds",
+			Help:    "Distribution of EventBrite page fetch duration in seconds",
 			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10},
 		}),
-		NtfyPublishesTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_ntfy_publishes_total",
-			Help: "Total number of successful ntfy publishes",
+		LastRunEventBritePagesFetched: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_eventbrite_pages_fetched_total",
+			Help: "Number of EventBrite API pages fetched in the last execution",
 		}),
 
-		// Redis
-		RedisConnectionErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_redis_connection_errors_total",
-			Help: "Total number of Redis connection errors",
+		LastRunNtfyPublishErrors: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_ntfy_publish_errors_total",
+			Help: "Number of ntfy publish errors in the last execution",
 		}),
-		RedisOperationErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_redis_operation_errors_total",
-			Help: "Total number of Redis operation errors (SetNX, Delete, etc.)",
+		LastRunNtfyPublishDurationSecs: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "scraper_last_run_ntfy_publish_duration_seconds",
+			Help:    "Distribution of ntfy publish duration in seconds",
+			Buckets: []float64{0.1, 0.5, 1, 2, 5},
 		}),
-		RedisConnectionRetries: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name:    "lectures_notifier_redis_connection_retries",
-			Help:    "Number of attempts to establish Redis connection",
-			Buckets: []float64{1, 2, 3, 5, 10},
-		}),
-
-		// General errors
-		ErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "lectures_notifier_errors_total",
-			Help: "Total number of errors encountered",
-		}),
-
-		// Last run status
-		LastRunStatus: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lectures_notifier_last_run_status",
-			Help: "Last run status: 0=unknown, 1=success, 2=failure",
-		}),
-		LastErrorMessage: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "lectures_notifier_last_error_message_code",
-			Help: "Last error code for debugging (hash of error message)",
+		LastRunNtfyPublishes: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scraper_last_run_ntfy_publishes_total",
+			Help: "Number of successful ntfy publishes in the last execution",
 		}),
 	}
 
 	m.registry = prometheus.NewRegistry()
 	m.registry.MustRegister(
-		m.ExecutionStartTime,
-		m.ExecutionSuccess,
-		m.ExecutionFailure,
+		m.LastSuccessTimestamp,
+		m.LastRunSuccess,
+		m.LastRunDurationSeconds,
 		m.ExecutionDurationSecs,
-		m.LastExecutionTimestamp,
-		m.EventsProcessedTotal,
-		m.EventsAvailableTotal,
-		m.EventsNotifiedTotal,
-		m.EventsDeduplicatedTotal,
-		m.EventsSoldOutTotal,
-		m.EventsWithoutStartTimeTotal,
-		m.EventBriteFetchErrorsTotal,
-		m.EventBriteFetchDurationSecs,
-		m.EventBritePagesFetchedTotal,
-		m.NtfyPublishErrorsTotal,
-		m.NtfyPublishDurationSecs,
-		m.NtfyPublishesTotal,
-		m.RedisConnectionErrorsTotal,
-		m.RedisOperationErrorsTotal,
-		m.RedisConnectionRetries,
-		m.ErrorsTotal,
-		m.LastRunStatus,
-		m.LastErrorMessage,
+		m.LastRunItemsProcessed,
+		m.LastRunItemsAvailable,
+		m.LastRunItemsNotified,
+		m.LastRunItemsDeduplicated,
+		m.LastRunItemsSoldOut,
+		m.LastRunItemsWithoutStartTime,
+		m.LastRunRedisConnectionErrors,
+		m.LastRunRedisOperationErrors,
+		m.LastRunRedisConnectionRetries,
+		m.LastRunEventBriteFetchErrors,
+		m.LastRunEventBriteFetchDurationSecs,
+		m.LastRunEventBritePagesFetched,
+		m.LastRunNtfyPublishErrors,
+		m.LastRunNtfyPublishDurationSecs,
+		m.LastRunNtfyPublishes,
 	)
 
 	// Set up pusher if URL is provided
@@ -202,162 +167,149 @@ func NewMetrics(pushgatewayURL, jobName string) *Metrics {
 	return m
 }
 
-// RecordExecutionStart records the start of an execution
+// RecordExecutionStart records the start of an execution.
 func (m *Metrics) RecordExecutionStart(ctx context.Context) {
 	if m == nil {
 		return
 	}
-	m.ExecutionStartTime.Inc()
-	m.LastExecutionTimestamp.SetToCurrentTime()
+	m.LastRunSuccess.Set(0)
 	log.Printf("metrics: execution started")
 }
 
-// RecordExecutionSuccess records a successful execution
+// RecordExecutionSuccess records a successful execution.
 func (m *Metrics) RecordExecutionSuccess(ctx context.Context, duration time.Duration) {
 	if m == nil {
 		return
 	}
-	m.ExecutionSuccess.Inc()
+	m.LastRunSuccess.Set(1)
+	m.LastSuccessTimestamp.SetToCurrentTime()
+	m.LastRunDurationSeconds.Set(duration.Seconds())
 	m.ExecutionDurationSecs.Observe(duration.Seconds())
-	m.LastRunStatus.Set(1)
-	m.LastExecutionTimestamp.SetToCurrentTime()
 	log.Printf("metrics: execution successful (duration: %v)", duration)
 }
 
-// RecordExecutionFailure records a failed execution
+// RecordExecutionFailure records a failed execution.
 func (m *Metrics) RecordExecutionFailure(ctx context.Context, duration time.Duration, errorMsg string) {
 	if m == nil {
 		return
 	}
-	m.ExecutionFailure.Inc()
+	m.LastRunSuccess.Set(0)
+	m.LastRunDurationSeconds.Set(duration.Seconds())
 	m.ExecutionDurationSecs.Observe(duration.Seconds())
-	m.LastRunStatus.Set(2)
-	m.LastExecutionTimestamp.SetToCurrentTime()
-	m.ErrorsTotal.Inc()
-	m.LastErrorMessage.Set(float64(hashString(errorMsg)))
 	log.Printf("metrics: execution failed (duration: %v, error: %s)", duration, errorMsg)
 }
 
-// RecordEventsProcessed records the number of events processed
+// RecordEventsProcessed records the number of events processed.
 func (m *Metrics) RecordEventsProcessed(count int) {
 	if m == nil {
 		return
 	}
-	for i := 0; i < count; i++ {
-		m.EventsProcessedTotal.Inc()
-	}
+	m.LastRunItemsProcessed.Add(float64(count))
 }
 
-// RecordEventsAvailable records events with available tickets
+// RecordEventsAvailable records events with available tickets.
 func (m *Metrics) RecordEventsAvailable(count int) {
 	if m == nil {
 		return
 	}
-	for i := 0; i < count; i++ {
-		m.EventsAvailableTotal.Inc()
-	}
+	m.LastRunItemsAvailable.Add(float64(count))
 }
 
-// RecordEventNotified records an event that was notified
+// RecordEventNotified records an event that was notified.
 func (m *Metrics) RecordEventNotified() {
 	if m == nil {
 		return
 	}
-	m.EventsNotifiedTotal.Inc()
+	m.LastRunItemsNotified.Inc()
 }
 
-// RecordEventDeduplicated records an event that was deduplicated
+// RecordEventDeduplicated records an event that was deduplicated.
 func (m *Metrics) RecordEventDeduplicated() {
 	if m == nil {
 		return
 	}
-	m.EventsDeduplicatedTotal.Inc()
+	m.LastRunItemsDeduplicated.Inc()
 }
 
-// RecordEventSoldOut records an event that became sold out
+// RecordEventSoldOut records an event that became sold out.
 func (m *Metrics) RecordEventSoldOut() {
 	if m == nil {
 		return
 	}
-	m.EventsSoldOutTotal.Inc()
+	m.LastRunItemsSoldOut.Inc()
 }
 
-// RecordEventWithoutStartTime records an event without start time
+// RecordEventWithoutStartTime records an event without start time.
 func (m *Metrics) RecordEventWithoutStartTime() {
 	if m == nil {
 		return
 	}
-	m.EventsWithoutStartTimeTotal.Inc()
+	m.LastRunItemsWithoutStartTime.Inc()
 }
 
-// RecordEventBriteFetch records an EventBrite fetch operation
+// RecordEventBriteFetch records an EventBrite fetch operation.
 func (m *Metrics) RecordEventBriteFetch(duration time.Duration, err error) {
 	if m == nil {
 		return
 	}
-	m.EventBriteFetchDurationSecs.Observe(duration.Seconds())
-	if err != nil {
-		m.EventBriteFetchErrorsTotal.Inc()
-		m.ErrorsTotal.Inc()
-		log.Printf("metrics: EventBrite fetch error recorded")
+	if duration > 0 {
+		m.LastRunEventBriteFetchDurationSecs.Observe(duration.Seconds())
 	}
-	m.EventBritePagesFetchedTotal.Inc()
+	if err != nil {
+		m.LastRunEventBriteFetchErrors.Inc()
+		log.Printf("metrics: EventBrite fetch error: %v", err)
+	}
+	m.LastRunEventBritePagesFetched.Inc()
 }
 
-// RecordEventBriteFetchPageDuration records duration for fetching a specific page
+// RecordEventBriteFetchPageDuration records duration for fetching a specific page.
 func (m *Metrics) RecordEventBriteFetchPageDuration(duration time.Duration) {
 	if m == nil {
 		return
 	}
-	m.EventBriteFetchDurationSecs.Observe(duration.Seconds())
-	m.EventBritePagesFetchedTotal.Inc()
+	m.LastRunEventBriteFetchDurationSecs.Observe(duration.Seconds())
+	m.LastRunEventBritePagesFetched.Inc()
 }
 
-// RecordNtfyPublish records an ntfy publish operation
+// RecordNtfyPublish records an ntfy publish operation.
 func (m *Metrics) RecordNtfyPublish(duration time.Duration, err error) {
 	if m == nil {
 		return
 	}
-	m.NtfyPublishDurationSecs.Observe(duration.Seconds())
+	m.LastRunNtfyPublishDurationSecs.Observe(duration.Seconds())
 	if err != nil {
-		m.NtfyPublishErrorsTotal.Inc()
-		m.ErrorsTotal.Inc()
-		log.Printf("metrics: ntfy publish error recorded")
+		m.LastRunNtfyPublishErrors.Inc()
+		log.Printf("metrics: ntfy publish error: %v", err)
 	} else {
-		m.NtfyPublishesTotal.Inc()
+		m.LastRunNtfyPublishes.Inc()
 	}
 }
 
-// RecordRedisConnectionError records a Redis connection error
+// RecordRedisConnectionError records a Redis connection error.
 func (m *Metrics) RecordRedisConnectionError() {
 	if m == nil {
 		return
 	}
-	m.RedisConnectionErrorsTotal.Inc()
-	m.ErrorsTotal.Inc()
-	log.Printf("metrics: Redis connection error recorded")
+	m.LastRunRedisConnectionErrors.Inc()
 }
 
-// RecordRedisOperationError records a Redis operation error
+// RecordRedisOperationError records a Redis operation error.
 func (m *Metrics) RecordRedisOperationError() {
 	if m == nil {
 		return
 	}
-	m.RedisOperationErrorsTotal.Inc()
-	m.ErrorsTotal.Inc()
-	log.Printf("metrics: Redis operation error recorded")
+	m.LastRunRedisOperationErrors.Inc()
 }
 
-// RecordRedisConnectionRetries records the number of retries for Redis connection
+// RecordRedisConnectionRetries records the number of retries for Redis connection.
 func (m *Metrics) RecordRedisConnectionRetries(attempts int) {
 	if m == nil {
 		return
 	}
-	m.RedisConnectionRetries.Observe(float64(attempts))
-	log.Printf("metrics: Redis connection retries recorded (attempts: %d)", attempts)
+	m.LastRunRedisConnectionRetries.Observe(float64(attempts))
 }
 
-// Push pushes all metrics to the Pushgateway
+// Push pushes all metrics to the Pushgateway.
 func (m *Metrics) Push(ctx context.Context) error {
 	if m == nil || m.pusher == nil {
 		return nil
@@ -372,16 +324,7 @@ func (m *Metrics) Push(ctx context.Context) error {
 	return nil
 }
 
-// hashString creates a simple hash of a string for error tracking
-func hashString(s string) uint64 {
-	h := uint64(5381)
-	for _, c := range s {
-		h = ((h << 5) + h) + uint64(c)
-	}
-	return h
-}
-
-// InitializeMetricsFromEnv creates and configures metrics from environment variables
+// InitializeMetricsFromEnv creates and configures metrics from environment variables.
 func InitializeMetricsFromEnv(isLocal bool) *Metrics {
 	if isLocal {
 		log.Printf("metrics: running in local mode, Pushgateway disabled")
@@ -391,7 +334,6 @@ func InitializeMetricsFromEnv(isLocal bool) *Metrics {
 	pushgatewayURL := os.Getenv("PROMETHEUS_PUSHGATEWAY_URL")
 	if pushgatewayURL == "" {
 		log.Printf("metrics: PROMETHEUS_PUSHGATEWAY_URL not set, metrics collection enabled but push disabled")
-		// Still create metrics for collection, but don't push
 		return NewMetrics("", "")
 	}
 
@@ -409,7 +351,6 @@ func InitializeMetricsFromEnv(isLocal bool) *Metrics {
 	log.Printf("metrics: Pushgateway URL: %s, Job: %s, Instance: %s", pushgatewayURL, jobName, groupingKey)
 	m := NewMetrics(pushgatewayURL, jobName)
 
-	// Add instance label if configured
 	if groupingKey != "" {
 		m.pusher = m.pusher.Grouping("instance", groupingKey)
 	}
