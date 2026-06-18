@@ -1,0 +1,46 @@
+name: GitOps Loop
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scraper/k8s/**'
+      - 'scraper/Taskfile.yml'
+      - 'scraper/cmd/grafana-dashboard/**'
+      - '.github/workflows/gitops.yml'
+  workflow_dispatch:
+
+jobs:
+  gitops:
+    name: Sync GitOps Deployments
+    runs-on: home-lab-runners
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.5'
+          cache-dependency-path: scraper/go.sum
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.34.3'
+
+      - name: Generate Grafana Dashboard
+        run: task scraper:grafana:dashboard:generate
+
+      - name: Deploy Grafana Dashboard
+        run: task scraper:grafana:dashboard:deploy
+
+      - name: Deploy CronJobs
+        run: task scraper:k8s:deploy-cronjobs
