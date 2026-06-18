@@ -76,7 +76,7 @@ The project is configured for automated push-based deployments to the home lab K
 
 - **Workflow File:** [.github/workflows/gitops.yml](file:///.github/workflows/gitops.yml)
 - **Triggers:** Pushes to the `main` branch when changes are detected under `scraper/k8s/`, `scraper/Taskfile.yml`, `scraper/cmd/grafana-dashboard/`, or the workflow file itself.
-- **Execution Target:** Runs on self-hosted runners labeled `home-lab-runners`.
+- **Execution Target:** Runs on self-hosted runners labeled `home-lab-runners-scraper`.
 - **Deployment Process:**
   1. Bootstraps Go (`1.25.5`) and caching.
   2. Setup `task` and `kubectl`.
