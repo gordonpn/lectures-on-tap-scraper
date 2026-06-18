@@ -69,3 +69,18 @@ A multi-site outage (Internet failure in Boston) revealed several architectural 
 - **Healthcheck Brittleness:** Added "start", "fail", and "success" signals with robust context handling to ensure delivery even during timeouts.
 - **Circuit Breaking:** Added logic to stop Redis reconnection attempts after a failure to prevent redundant timeouts.
 - **Best-Effort Delivery:** Changed notification logic to proceed even if Redis is unavailable, ensuring alerts are sent whenever possible.
+
+## Push-Based GitOps Loop
+
+The project is configured for automated push-based deployments to the home lab K3s cluster.
+
+- **Workflow File:** [.github/workflows/gitops.yml](file:///.github/workflows/gitops.yml)
+- **Triggers:** Pushes to the `main` branch when changes are detected under `scraper/k8s/`, `scraper/Taskfile.yml`, `scraper/cmd/grafana-dashboard/`, or the workflow file itself.
+- **Execution Target:** Runs on self-hosted runners labeled `home-lab-runners`.
+- **Deployment Process:**
+  1. Bootstraps Go (`1.25.5`) and caching.
+  2. Setup `task` and `kubectl`.
+  3. Generates the Grafana dashboard JSON model: `task scraper:grafana:dashboard:generate`.
+  4. Deploys the Grafana dashboard as a ConfigMap in the `monitoring` namespace: `task scraper:grafana:dashboard:deploy`.
+  5. Deploys the notifier CronJob manifest: `task scraper:k8s:deploy-cronjobs`.
+
