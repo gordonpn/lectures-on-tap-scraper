@@ -14,7 +14,7 @@ on:
 jobs:
   gitops:
     name: Sync GitOps Deployments
-    runs-on: home-lab-runners
+    runs-on: home-lab-runners-scraper
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
