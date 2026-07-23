@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ type ebResp struct {
 	Events     []event `json:"events"`
 	Pagination struct {
 		HasMoreItems bool `json:"has_more_items"`
+		PageCount    int  `json:"page_count"`
 	} `json:"pagination"`
 }
 
@@ -185,78 +187,113 @@ func retryRedisConnection(ctx context.Context, redisClient *redis.Client, maxAtt
 	return nil, fmt.Errorf("redis connection failed after %d attempts", maxAttempts)
 }
 
+func fetchPage(ctx context.Context, client *http.Client, orgID, token string, page int, m *metrics.Metrics) ([]event, int, error) {
+	url := fmt.Sprintf(
+		"https://www.eventbriteapi.com/v3/organizers/%s/events/?status=live&expand=venue,ticket_availability&page=%d",
+		orgID, page,
+	)
+	log.Printf("fetching page %d from EventBrite", page)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	var resp *http.Response
+	var err error
+	maxRetries := 4
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
+		startTime := time.Now()
+		resp, err = client.Do(req)
+		elapsed := time.Since(startTime)
+		log.Printf("EventBrite request attempt %d for page %d took %v", attempt, page, elapsed)
+		m.RecordEventBriteFetchPageDuration(elapsed)
+
+		if err == nil {
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				break
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			err = fmt.Errorf("eventbrite status %d: %s", resp.StatusCode, string(body))
+
+			if resp.StatusCode != 429 && (resp.StatusCode >= 400 && resp.StatusCode < 500) {
+				log.Printf("permanent error from EventBrite for page %d: %v", page, err)
+				m.RecordEventBriteFetch(0, err)
+				return nil, 0, err
+			}
+		}
+
+		if attempt < maxRetries {
+			waitTime := time.Duration(1<<uint(attempt-1)) * time.Second
+			log.Printf("error making request to EventBrite for page %d (attempt %d): %v, retrying in %v", page, attempt, err, waitTime)
+			
+			select {
+			case <-ctx.Done():
+				return nil, 0, ctx.Err()
+			case <-time.After(waitTime):
+			}
+		} else {
+			log.Printf("error making request to EventBrite for page %d after %d attempts: %v", page, maxRetries, err)
+			m.RecordEventBriteFetch(0, err)
+			return nil, 0, err
+		}
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		log.Printf("error reading EventBrite response body for page %d: %v", page, err)
+		return nil, 0, err
+	}
+
+	var r ebResp
+	if err := json.Unmarshal(body, &r); err != nil {
+		log.Printf("error parsing EventBrite response for page %d: %v", page, err)
+		return nil, 0, err
+	}
+
+	return r.Events, r.Pagination.PageCount, nil
+}
+
 func fetchAllLiveEvents(ctx context.Context, client *http.Client, orgID, token string, m *metrics.Metrics) ([]event, error) {
 	log.Printf("starting to fetch live events from EventBrite for organizer %s", orgID)
-	var all []event
-	page := 1
+	
+	firstPageEvents, pageCount, err := fetchPage(ctx, client, orgID, token, 1, m)
+	if err != nil {
+		return nil, err
+	}
+	
+	log.Printf("fetched %d events from page 1, total pages: %d", len(firstPageEvents), pageCount)
+	all := firstPageEvents
 
-	for {
-		url := fmt.Sprintf(
-			"https://www.eventbriteapi.com/v3/organizers/%s/events/?status=live&expand=venue,ticket_availability&page=%d",
-			orgID, page,
-		)
-		log.Printf("fetching page %d from EventBrite", page)
-		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-		req.Header.Set("Authorization", "Bearer "+token)
+	if pageCount > 1 {
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		errs := make(chan error, pageCount-1)
 
-		var resp *http.Response
-		var err error
-		maxRetries := 4
-		for attempt := 1; attempt <= maxRetries; attempt++ {
-			startTime := time.Now()
-			resp, err = client.Do(req)
-			elapsed := time.Since(startTime)
-			log.Printf("EventBrite request attempt %d took %v", attempt, elapsed)
-			m.RecordEventBriteFetchPageDuration(elapsed)
-
-			if err == nil {
-				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-					break
+		for p := 2; p <= pageCount; p++ {
+			wg.Add(1)
+			go func(page int) {
+				defer wg.Done()
+				events, _, fetchErr := fetchPage(ctx, client, orgID, token, page, m)
+				if fetchErr != nil {
+					errs <- fetchErr
+					return
 				}
-				// Not a 2xx status code. Read body and close it before potential retry.
-				body, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				err = fmt.Errorf("eventbrite status %d: %s", resp.StatusCode, string(body))
-
-				// Don't retry for permanent errors (4xx except 429)
-				if resp.StatusCode != 429 && (resp.StatusCode >= 400 && resp.StatusCode < 500) {
-					log.Printf("permanent error from EventBrite: %v", err)
-					m.RecordEventBriteFetch(0, err)
-					return nil, err
-				}
-			}
-
-			if attempt < maxRetries {
-				waitTime := time.Duration(1<<uint(attempt-1)) * time.Second
-				log.Printf("error making request to EventBrite (attempt %d): %v, retrying in %v", attempt, err, waitTime)
-				time.Sleep(waitTime)
-			} else {
-				log.Printf("error making request to EventBrite after %d attempts: %v", maxRetries, err)
-				m.RecordEventBriteFetch(0, err)
-				return nil, err
-			}
+				mu.Lock()
+				all = append(all, events...)
+				mu.Unlock()
+				log.Printf("fetched %d events from page %d", len(events), page)
+			}(p)
 		}
+		
+		wg.Wait()
+		close(errs)
 
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("error reading EventBrite response body: %v", err)
-			return nil, err
+		if len(errs) > 0 {
+			return nil, <-errs // Return the first error encountered
 		}
-
-		var r ebResp
-		if err := json.Unmarshal(body, &r); err != nil {
-			log.Printf("error parsing EventBrite response: %v", err)
-			return nil, err
-		}
-
-		log.Printf("fetched %d events from page %d", len(r.Events), page)
-		all = append(all, r.Events...)
-		if !r.Pagination.HasMoreItems {
-			log.Printf("no more pages available (page=%d)", page)
-			break
-		}
-		page++
 	}
 
 	log.Printf("successfully fetched all %d live events", len(all))
@@ -356,7 +393,11 @@ func pingHealthchecks(ctx context.Context, client *http.Client, baseURL, suffix 
 		if attempt < maxRetries {
 			wait := time.Duration(1<<uint(attempt-1)) * time.Second
 			log.Printf("healthchecks ping %q retrying in %v", suffix, wait)
-			time.Sleep(wait)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
 		}
 	}
 }
@@ -580,8 +621,12 @@ func main() {
 	httpClient := &http.Client{Timeout: 45 * time.Second}
 	metricsClient := metrics.InitializeMetricsFromEnv(isLocal)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+	ctx, timeoutCancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer func() {
+		timeoutCancel()
+		cancel()
+	}()
 
 	startTime := time.Now()
 	metricsClient.RecordExecutionStart(ctx)
