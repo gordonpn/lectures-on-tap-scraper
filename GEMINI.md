@@ -70,6 +70,15 @@ A multi-site outage (Internet failure in Boston) revealed several architectural 
 - **Circuit Breaking:** Added logic to stop Redis reconnection attempts after a failure to prevent redundant timeouts.
 - **Best-Effort Delivery:** Changed notification logic to proceed even if Redis is unavailable, ensuring alerts are sent whenever possible.
 
+## Reliability Post-Mortem (Healthchecks Flakiness) - RESOLVED
+
+A persistent issue with Healthchecks.io reporting the scraper as DOWN and then UP after a few minutes was identified and resolved:
+
+- **Context Timeout vs Grace Period:** The script previously had a 5-minute context timeout, which, combined with a 10-50s initial sleep and sequential HTTP fetches, occasionally exceeded the 3-minute Healthchecks grace period. The global context timeout was reduced to 3 minutes to strictly enforce execution boundaries before the grace period expires.
+- **Signal Handling:** Added `os.Interrupt` and `os.Kill` (SIGTERM) handling via `signal.NotifyContext` so that when Kubernetes terminates a pod (`concurrencyPolicy: Replace`), it sends a "fail" ping gracefully instead of abruptly dying.
+- **Concurrent API Fetching:** Refactored `fetchAllLiveEvents` to fetch the first Eventbrite page, read the `page_count`, and fetch subsequent pages concurrently. This drastically cuts down the runtime.
+- **Context-Aware Retries:** Fixed retry loops (HTTP requests and Redis pings) that were previously using `time.Sleep` independently of the context, causing delays even after a timeout occurred.
+
 ## Push-Based GitOps Loop
 
 The project is configured for automated push-based deployments to the home lab K3s cluster.
