@@ -79,6 +79,10 @@ A persistent issue with Healthchecks.io reporting the scraper as DOWN and then U
 - **Concurrent API Fetching:** Refactored `fetchAllLiveEvents` to fetch the first Eventbrite page, read the `page_count`, and fetch subsequent pages concurrently. This drastically cuts down the runtime.
 - **Independent Exit Hooks:** Previously, Prometheus metrics `Push` and Healthchecks pings were executed sequentially with a shared context in the `defer` block. If the home lab Pushgateway was slow, it consumed the entire timeout, causing the Healthchecks ping to cancel silently (leading to "grace time passed" alerts). They now run concurrently with independent contexts to guarantee Healthcheck delivery.
 - **Context-Aware Retries:** Fixed retry loops (HTTP requests and Redis pings) that were previously using `time.Sleep` independently of the context, causing delays even after a timeout occurred.
+- **CoreDNS Timeout Mitigation:** Discovered that intermittent CoreDNS packet drops caused the Go resolver to stall for up to 30s per DNS query (`ndots:5` sequential lookup behavior). To prevent these lookups from cascading into multi-minute delays and breaching the context timeout:
+  - Added `dnsConfig` to `cronjob.yaml` with `ndots: 1` and `single-request-reopen`.
+  - Configured a custom `net.Dialer` in the scraper's HTTP client with an aggressive 10s connection/DNS timeout to fail-fast and retry.
+  - Offloaded the Healthchecks "start" ping into an asynchronous goroutine so that a DNS delay there does not hold up the Eventbrite fetches.
 
 ## Push-Based GitOps Loop
 
