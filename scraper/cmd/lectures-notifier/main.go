@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -619,7 +620,22 @@ func main() {
 	isLocal := os.Getenv("NTFY_TOPIC_URL") == ""
 	logModeAndSleep(isLocal)
 	cfg := loadConfig(isLocal)
-	httpClient := &http.Client{Timeout: 45 * time.Second}
+	
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	httpClient := &http.Client{
+		Timeout: 45 * time.Second,
+		Transport: &http.Transport{
+			DialContext:           dialer.DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
 	metricsClient := metrics.InitializeMetricsFromEnv(isLocal)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill, syscall.SIGTERM)
@@ -679,6 +695,6 @@ func main() {
 		}
 	}()
 
-	pingHealthchecks(ctx, httpClient, cfg.healthchecksPingURL, "start", 3)
+	go pingHealthchecks(context.Background(), httpClient, cfg.healthchecksPingURL, "start", 3)
 	runErr = runNotifier(ctx, httpClient, cfg, isLocal, metricsClient)
 }
