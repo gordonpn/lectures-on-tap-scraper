@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gordonpn/lectures-on-tap-scraper/internal/metrics"
@@ -621,7 +622,7 @@ func main() {
 	httpClient := &http.Client{Timeout: 45 * time.Second}
 	metricsClient := metrics.InitializeMetricsFromEnv(isLocal)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill, syscall.SIGTERM)
 	ctx, timeoutCancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer func() {
 		timeoutCancel()
@@ -642,24 +643,39 @@ func main() {
 			runErr = fmt.Errorf("panic: %v", r)
 		}
 
-		// Use a separate context to ensure pushing and pinging occur even if main context expired
-		reportCtx, reportCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer reportCancel()
-
 		if runErr != nil {
-			metricsClient.RecordExecutionFailure(reportCtx, duration, runErr.Error())
-			_ = metricsClient.Push(reportCtx)
-			pingHealthchecks(reportCtx, httpClient, cfg.healthchecksPingURL, "fail", 3)
-
-			if panicVal != nil {
-				log.Fatalf("notifier panicked: %v", panicVal)
-			} else {
-				log.Fatalf("notifier run failed: %v", runErr)
-			}
+			metricsClient.RecordExecutionFailure(context.Background(), duration, runErr.Error())
 		} else {
-			metricsClient.RecordExecutionSuccess(reportCtx, duration)
-			_ = metricsClient.Push(reportCtx)
-			pingHealthchecks(reportCtx, httpClient, cfg.healthchecksPingURL, "", 3)
+			metricsClient.RecordExecutionSuccess(context.Background(), duration)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pushCtx, pushCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer pushCancel()
+			_ = metricsClient.Push(pushCtx)
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pingCtx, pingCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer pingCancel()
+			suffix := ""
+			if runErr != nil {
+				suffix = "fail"
+			}
+			pingHealthchecks(pingCtx, httpClient, cfg.healthchecksPingURL, suffix, 3)
+		}()
+
+		wg.Wait()
+
+		if panicVal != nil {
+			log.Fatalf("notifier panicked: %v", panicVal)
+		} else if runErr != nil {
+			log.Fatalf("notifier run failed: %v", runErr)
 		}
 	}()
 
