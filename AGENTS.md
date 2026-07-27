@@ -75,8 +75,9 @@ A multi-site outage (Internet failure in Boston) revealed several architectural 
 A persistent issue with Healthchecks.io reporting the scraper as DOWN and then UP after a few minutes was identified and resolved:
 
 - **Context Timeout vs Grace Period:** The script previously had a 5-minute context timeout, which, combined with a 10-50s initial sleep and sequential HTTP fetches, occasionally exceeded the 3-minute Healthchecks grace period. The global context timeout was reduced to 3 minutes to strictly enforce execution boundaries before the grace period expires.
-- **Signal Handling:** Added `os.Interrupt` and `os.Kill` (SIGTERM) handling via `signal.NotifyContext` so that when Kubernetes terminates a pod (`concurrencyPolicy: Replace`), it sends a "fail" ping gracefully instead of abruptly dying.
+- **Signal Handling:** Added `os.Interrupt` and `syscall.SIGTERM` handling via `signal.NotifyContext` so that when Kubernetes terminates a pod (`concurrencyPolicy: Replace`), it sends a "fail" ping gracefully instead of abruptly dying.
 - **Concurrent API Fetching:** Refactored `fetchAllLiveEvents` to fetch the first Eventbrite page, read the `page_count`, and fetch subsequent pages concurrently. This drastically cuts down the runtime.
+- **Independent Exit Hooks:** Previously, Prometheus metrics `Push` and Healthchecks pings were executed sequentially with a shared context in the `defer` block. If the home lab Pushgateway was slow, it consumed the entire timeout, causing the Healthchecks ping to cancel silently (leading to "grace time passed" alerts). They now run concurrently with independent contexts to guarantee Healthcheck delivery.
 - **Context-Aware Retries:** Fixed retry loops (HTTP requests and Redis pings) that were previously using `time.Sleep` independently of the context, causing delays even after a timeout occurred.
 
 ## Push-Based GitOps Loop
