@@ -17,7 +17,7 @@ spec:
       ttlSecondsAfterFinished: 86400
       template:
         spec:
-          restartPolicy: OnFailure
+          restartPolicy: Never
           dnsConfig:
             options:
               - name: ndots
