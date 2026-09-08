@@ -83,6 +83,9 @@ A persistent issue with Healthchecks.io reporting the scraper as DOWN and then U
   - Added `dnsConfig` to `cronjob.yaml` with `ndots: 1` and `single-request-reopen`.
   - Configured a custom `net.Dialer` in the scraper's HTTP client with an aggressive 10s connection/DNS timeout to fail-fast and retry.
   - Offloaded the Healthchecks "start" ping into an asynchronous goroutine so that a DNS delay there does not hold up the Eventbrite fetches.
+- **Transient Upstream Errors vs Fail Pings:** Upstream 5xx errors (such as 502/503) or transient network timeouts do not send a `/fail` ping to Healthchecks.io. Instead, they log the error, record the failure in Prometheus, and rely on Healthchecks' grace period to alert if consecutive runs fail. Immediate `/fail` pings are reserved for unrecoverable errors (HTTP 401 Unauthorized, invalid credentials, or panics).
+- **Upstream 5xx Backoff:** Retrying upstream 502/503 responses uses an increased 10s base exponential backoff (10s, 20s, 40s) so that the scraper does not exhaust retries while an upstream edge gateway is recovering.
+- **Pod Restart Policy:** Pod restartPolicy is set to `Never` across CronJob manifests (`cronjob.yaml` and `lectures-notifier.yaml`). For 5-minute scheduled jobs, in-pod restart loops cause redundant pings, pod churn, and SIGTERM contention. Letting failed runs terminate cleanly leaves subsequent runs to the scheduled interval.
 
 ## Push-Based GitOps Loop
 

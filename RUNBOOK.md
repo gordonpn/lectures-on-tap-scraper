@@ -13,7 +13,8 @@ We use [healthchecks.io](https://healthchecks.io) to monitor the execution of th
 *   **Signals Sent:**
     *   `/start`: Sent when the application begins execution.
     *   Success (no suffix): Sent when the application completes successfully.
-*   **Removed Failure Signal:** We intentionally **do not** send a `/fail` signal. This allows the Kubernetes `restartPolicy: OnFailure` to retry transient errors without triggering false positive alerts. An alert is only triggered if the "Success" signal fails to arrive within the grace period.
+    *   `/fail`: Sent exclusively for unrecoverable errors (e.g. HTTP 401 Unauthorized, invalid credentials, or panics). Transient upstream 5xx or network errors do not send `/fail` and rely on the Healthchecks grace period to alert if multiple consecutive runs fail.
+*   **Restart Policy:** Pod `restartPolicy: Never` ensures failed jobs exit cleanly and wait for the next scheduled interval rather than loop-restarting in-pod and causing pod churn or redundant pings.
 *   **Configuration:**
     *   **Type:** Cron
     *   **Schedule:** `*/5 10-18 * * *` (Matches the K8s CronJob schedule)
