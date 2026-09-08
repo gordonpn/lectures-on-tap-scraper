@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -189,6 +190,16 @@ func retryRedisConnection(ctx context.Context, redisClient *redis.Client, maxAtt
 	return nil, fmt.Errorf("redis connection failed after %d attempts", maxAttempts)
 }
 
+func calculateBackoff(attempt int, statusCode int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	if statusCode == http.StatusBadGateway || statusCode == http.StatusServiceUnavailable || (statusCode >= 500 && statusCode < 600) {
+		return time.Duration(1<<uint(attempt-1)) * 10 * time.Second
+	}
+	return time.Duration(1<<uint(attempt-1)) * time.Second
+}
+
 func fetchPage(ctx context.Context, client *http.Client, orgID, token string, page int, m *metrics.Metrics) ([]event, int, error) {
 	url := fmt.Sprintf(
 		"https://www.eventbriteapi.com/v3/organizers/%s/events/?status=live&expand=venue,ticket_availability&page=%d",
@@ -205,6 +216,7 @@ func fetchPage(ctx context.Context, client *http.Client, orgID, token string, pa
 		if err := ctx.Err(); err != nil {
 			return nil, 0, err
 		}
+		var statusCode int
 		startTime := time.Now()
 		resp, err = client.Do(req)
 		elapsed := time.Since(startTime)
@@ -212,6 +224,7 @@ func fetchPage(ctx context.Context, client *http.Client, orgID, token string, pa
 		m.RecordEventBriteFetchPageDuration(elapsed)
 
 		if err == nil {
+			statusCode = resp.StatusCode
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				break
 			}
@@ -222,12 +235,12 @@ func fetchPage(ctx context.Context, client *http.Client, orgID, token string, pa
 			if resp.StatusCode != 429 && (resp.StatusCode >= 400 && resp.StatusCode < 500) {
 				log.Printf("permanent error from EventBrite for page %d: %v", page, err)
 				m.RecordEventBriteFetch(0, err)
-				return nil, 0, err
+				return nil, 0, markUnrecoverable(err)
 			}
 		}
 
 		if attempt < maxRetries {
-			waitTime := time.Duration(1<<uint(attempt-1)) * time.Second
+			waitTime := calculateBackoff(attempt, statusCode)
 			log.Printf("error making request to EventBrite for page %d (attempt %d): %v, retrying in %v", page, attempt, err, waitTime)
 			
 			select {
@@ -615,6 +628,50 @@ func publishEventNotifications(ctx context.Context, primary notifications.Notifi
 	wg.Wait()
 }
 
+type unrecoverableError struct {
+	err error
+}
+
+func (e *unrecoverableError) Error() string {
+	return e.err.Error()
+}
+
+func (e *unrecoverableError) Unwrap() error {
+	return e.err
+}
+
+func markUnrecoverable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &unrecoverableError{err: err}
+}
+
+func isUnrecoverable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var unrec *unrecoverableError
+	if errors.As(err, &unrec) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "status 401") ||
+		strings.Contains(msg, "status 403") ||
+		strings.Contains(msg, "unauthorized") ||
+		strings.Contains(msg, "invalid credentials")
+}
+
+func determineHealthcheckSuffix(runErr error, panicVal interface{}) (string, bool) {
+	if panicVal != nil || isUnrecoverable(runErr) {
+		return "fail", true
+	}
+	if runErr != nil {
+		return "", false
+	}
+	return "", true
+}
+
 func main() {
 	log.Printf("starting lectures-notifier (pid=%d)", os.Getpid())
 	isLocal := os.Getenv("NTFY_TOPIC_URL") == ""
@@ -679,11 +736,12 @@ func main() {
 			defer wg.Done()
 			pingCtx, pingCancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer pingCancel()
-			suffix := ""
-			if runErr != nil {
-				suffix = "fail"
+			suffix, shouldPing := determineHealthcheckSuffix(runErr, panicVal)
+			if shouldPing {
+				pingHealthchecks(pingCtx, httpClient, cfg.healthchecksPingURL, suffix, 3)
+			} else {
+				log.Printf("transient error encountered (%v); skipping healthchecks /fail ping to rely on grace window", runErr)
 			}
-			pingHealthchecks(pingCtx, httpClient, cfg.healthchecksPingURL, suffix, 3)
 		}()
 
 		wg.Wait()
