@@ -224,3 +224,41 @@ func TestDetermineHealthcheckSuffix(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildNotifiers(t *testing.T) {
+	client := &http.Client{}
+
+	t.Run("discord disabled", func(t *testing.T) {
+		cfg := appConfig{
+			ntfyTopicURL:   "https://ntfy.example.com/topic",
+			ntfyToken:      "token",
+			discordEnabled: false,
+		}
+		primary, secondary := buildNotifiers(client, cfg, nil)
+		if primary == nil || primary.Name() != "ntfy" {
+			t.Errorf("expected primary notifier to be ntfy, got %v", primary)
+		}
+		if len(secondary) != 0 {
+			t.Errorf("expected 0 secondary notifiers when discord is disabled, got %d", len(secondary))
+		}
+	})
+
+	t.Run("discord enabled", func(t *testing.T) {
+		cfg := appConfig{
+			ntfyTopicURL:      "https://ntfy.example.com/topic",
+			ntfyToken:         "token",
+			discordEnabled:    true,
+			discordWebhookURL: "https://discord.com/api/webhooks/test",
+		}
+		primary, secondary := buildNotifiers(client, cfg, nil)
+		if primary == nil || primary.Name() != "ntfy" {
+			t.Errorf("expected primary notifier to be ntfy, got %v", primary)
+		}
+		if len(secondary) != 1 {
+			t.Fatalf("expected 1 secondary notifier when discord is enabled, got %d", len(secondary))
+		}
+		if secondary[0].Name() != "discord" {
+			t.Errorf("expected secondary notifier to be discord, got %s", secondary[0].Name())
+		}
+	})
+}
