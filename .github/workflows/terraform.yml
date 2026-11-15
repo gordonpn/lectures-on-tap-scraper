@@ -7,6 +7,7 @@ on:
     paths:
       - 'terraform/**'
       - 'Taskfile.yml'
+      - 'scripts/ci/**'
       - '.github/workflows/terraform.yml'
   pull_request:
     branches:
@@ -14,6 +15,7 @@ on:
     paths:
       - 'terraform/**'
       - 'Taskfile.yml'
+      - 'scripts/ci/**'
       - '.github/workflows/terraform.yml'
   workflow_dispatch:
 
@@ -57,9 +59,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup OpenTofu
-        uses: opentofu/setup-opentofu@v1
-        with:
-          tofu_version: 1.13.9
+        run: ./scripts/ci/setup-tofu.sh
 
       - name: OpenTofu Fmt Check
         run: task tf:fmt -- -check
