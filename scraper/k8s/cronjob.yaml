@@ -20,6 +20,8 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
           dnsPolicy: ClusterFirst
           dnsConfig:
             options:
@@ -30,6 +32,12 @@ spec:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
               imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
