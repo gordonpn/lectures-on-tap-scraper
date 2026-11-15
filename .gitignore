@@ -27,3 +27,10 @@ scraper/lectures-notifier
 
 .gemini/
 gha-creds-*.json
+
+# Terraform / OpenTofu
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+.terraform/

@@ -1,0 +1,5 @@
+# Example variable definitions for OpenTofu / Terraform
+# Copy this file to terraform.tfvars and fill in the values:
+# cp terraform.tfvars.example terraform.tfvars
+
+healthchecksio_api_key = "your-healthchecksio-api-key"

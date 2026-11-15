@@ -1,5 +1,9 @@
 version: '3'
 
+vars:
+  TERRAFORM_DIR: '{{.TASKFILE_DIR}}/terraform'
+  TF_BACKEND_ENDPOINT: '{{.TF_BACKEND_ENDPOINT | default "http://master.tailb65f8c.ts.net:30900"}}'
+
 includes:
   scraper:
     taskfile: ./scraper/Taskfile.yml
@@ -15,3 +19,45 @@ tasks:
     desc: Stop local compose services
     cmds:
       - docker compose -f docker-compose.yml down
+
+  tf:init:
+    desc: Initialize OpenTofu
+    dir: '{{.TERRAFORM_DIR}}'
+    env: &backend_credentials
+      AWS_ACCESS_KEY_ID: '{{.AWS_ACCESS_KEY_ID}}'
+      AWS_SECRET_ACCESS_KEY: '{{.AWS_SECRET_ACCESS_KEY}}'
+    preconditions: &backend_credential_checks
+      - sh: test -n "$AWS_ACCESS_KEY_ID"
+        msg: Export AWS_ACCESS_KEY_ID from secure local storage or CI secrets
+      - sh: test -n "$AWS_SECRET_ACCESS_KEY"
+        msg: Export AWS_SECRET_ACCESS_KEY from secure local storage or CI secrets
+    cmds:
+      - tofu init -backend-config="endpoint={{.TF_BACKEND_ENDPOINT}}" {{.CLI_ARGS}}
+
+  tf:fmt:
+    desc: Format OpenTofu files
+    dir: '{{.TERRAFORM_DIR}}'
+    cmds:
+      - tofu fmt -recursive {{.CLI_ARGS}}
+
+  tf:validate:
+    desc: Validate OpenTofu config
+    dir: '{{.TERRAFORM_DIR}}'
+    cmds:
+      - tofu validate {{.CLI_ARGS}}
+
+  tf:plan:
+    desc: Plan OpenTofu changes
+    dir: '{{.TERRAFORM_DIR}}'
+    env: *backend_credentials
+    preconditions: *backend_credential_checks
+    cmds:
+      - tofu plan {{.CLI_ARGS}}
+
+  tf:apply:
+    desc: Apply OpenTofu changes
+    dir: '{{.TERRAFORM_DIR}}'
+    env: *backend_credentials
+    preconditions: *backend_credential_checks
+    cmds:
+      - tofu apply {{.CLI_ARGS}}

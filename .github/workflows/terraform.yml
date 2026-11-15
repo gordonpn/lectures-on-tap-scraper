@@ -1,0 +1,78 @@
+name: Terraform GitOps
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'terraform/**'
+      - 'Taskfile.yml'
+      - 'scripts/ci/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'terraform/**'
+      - 'Taskfile.yml'
+      - 'scripts/ci/**'
+      - '.github/workflows/terraform.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    name: Terraform Reconcile
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: home-lab-runners-scraper
+    timeout-minutes: 15
+    env:
+      GODEBUG: "netdns=cgo"
+      TF_BACKEND_ENDPOINT: "http://minio.longhorn-system.svc.cluster.local:9000"
+      AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+      TF_VAR_healthchecksio_api_key: ${{ secrets.TF_VAR_HEALTHCHECKSIO_API_KEY }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prefer IPv4 Networking
+        run: |
+          set -euo pipefail
+          LINE="precedence ::ffff:0:0/96 100"
+          if ! grep -qxF "${LINE}" /etc/gai.conf 2>/dev/null; then
+            echo "${LINE}" | sudo tee -a /etc/gai.conf >/dev/null || true
+          fi
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup OpenTofu
+        run: ./scripts/ci/setup-tofu.sh
+
+      - name: OpenTofu Fmt Check
+        run: task tf:fmt -- -check
+
+      - name: OpenTofu Init
+        run: task tf:init
+
+      - name: OpenTofu Validate
+        run: task tf:validate
+
+      - name: OpenTofu Plan
+        run: task tf:plan
+
+      - name: OpenTofu Apply
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: task tf:apply -- -auto-approve
