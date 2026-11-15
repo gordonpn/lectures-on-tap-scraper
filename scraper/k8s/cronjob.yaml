@@ -5,6 +5,8 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: lectures-notifier-et-10m
+  labels:
+    app: lectures-notifier
 spec:
   timeZone: "America/New_York"
   schedule: "*/5 10-18 * * *"   # every 5 minutes from 10:00 to 18:59 ET
@@ -18,6 +20,7 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          dnsPolicy: ClusterFirst
           dnsConfig:
             options:
               - name: ndots
@@ -26,7 +29,7 @@ spec:
           containers:
             - name: notifier
               image: ghcr.io/gordonpn/lectures-notifier:main
-              imagePullPolicy: Always
+              imagePullPolicy: IfNotPresent
               envFrom:
                 - secretRef:
                     name: lectures-notifier-secrets
